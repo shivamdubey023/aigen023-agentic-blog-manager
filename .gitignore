@@ -6,4 +6,8 @@ __pycache__/
 data/drafts/*
 data/affiliate_ideas.json
 !data/drafts/.gitkeep
-\n# Local SQLite content database and transient WAL files\ncontent_ops.db\ncontent_ops.db-shm\ncontent_ops.db-wal\n
+# Local SQLite content database and transient WAL files
+content_ops.db
+content_ops.db-shm
+content_ops.db-wal
+.toml

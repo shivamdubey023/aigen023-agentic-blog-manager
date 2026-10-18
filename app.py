@@ -10,7 +10,7 @@ import streamlit as st
 
 from core import database as db
 from property_a_blog.blogger_client import (
-    BLOG_URL, REDIRECT_URI, finish_oauth, get_credentials, list_blogs,
+    BLOG_URL, get_redirect_uri, finish_oauth, get_credentials, list_blogs,
     oauth_error_hint, search_console_report, start_oauth, create_draft,
 )
 from property_a_blog.seo_optimizer import affiliate_box, content_quality_checks, render_article
@@ -337,7 +337,7 @@ with tabs[3]:
 with tabs[4]:
     st.subheader("Settings & OAuth token lifecycle")
     st.write("Publication target:",BLOG_URL)
-    st.write("OAuth callback:",REDIRECT_URI)
+    st.write("OAuth callback:",get_redirect_uri())
     st.write("Required Google API scopes:")
     st.code("https://www.googleapis.com/auth/blogger\nhttps://www.googleapis.com/auth/webmasters.readonly")
     google=secrets_section("google")

@@ -56,14 +56,30 @@ Analytics and AdSense reporting are not claimed as implemented in this refactor;
 Install Python 3.11 or newer. From the repository root:
 
 ```powershell
+New-Item -ItemType Directory -Force .streamlit
+notepad .streamlit\secrets.toml
 py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 pip install -r requirements.txt
+$env:GOOGLE_OAUTH_REDIRECT_URI = "http://localhost:8501/"
 streamlit run app.py
 ```
 
 If PowerShell blocks activation, use `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass` in that terminal, or run `.venv\Scripts\python.exe -m streamlit run app.py` without activating the environment.
+
+Add the following to `.streamlit\secrets.toml`, replacing the placeholders with your own values. Keep this file private; it is ignored by Git.
+
+```toml
+[app]
+allowed_email = "YOUR_GOOGLE_ACCOUNT_EMAIL"
+
+[google]
+client_id = "YOUR_GOOGLE_OAUTH_CLIENT_ID"
+client_secret = "YOUR_GOOGLE_OAUTH_CLIENT_SECRET"
+```
+
+For local sign-in, add `http://localhost:8501/` as an Authorized redirect URI on your Google OAuth Web application client. The environment variable above selects the callback for this local run; omit it in production to use the hosted callback.
 
 ## Run locally (Linux/macOS)
 
@@ -75,7 +91,7 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-The OAuth redirect URI is currently configured for the hosted app. For local Google API OAuth, create a separate local OAuth configuration and set its redirect URI to `http://localhost:8501/` before starting the local flow.
+The OAuth redirect URI defaults to the hosted app. For local Google API OAuth, configure `GOOGLE_OAUTH_REDIRECT_URI` as shown above and add that exact URI to the OAuth client's authorized redirect URIs.
 
 ## Persistence and zero-cost limitations
 

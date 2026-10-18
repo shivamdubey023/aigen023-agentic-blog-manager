@@ -1,6 +1,7 @@
 """Blogger and Search Console API wrappers with defensive errors."""
 from __future__ import annotations
 import json
+import os
 from datetime import date
 from typing import Any
 from core import database as db
@@ -16,6 +17,9 @@ IDENTITY_SCOPES = ["openid", "https://www.googleapis.com/auth/userinfo.email", "
 SCOPES = IDENTITY_SCOPES + [BLOGGER_SCOPE, SEARCH_CONSOLE_SCOPE]
 BLOG_URL = "https://aigen023.blogspot.com/"
 REDIRECT_URI = "https://aigen023-blog-manager.streamlit.app/"
+
+def get_redirect_uri() -> str:
+    return os.environ.get("GOOGLE_OAUTH_REDIRECT_URI", REDIRECT_URI).strip() or REDIRECT_URI
 
 def get_credentials(session_state: Any) -> Credentials | None:
     token = session_state.get("google_api_token")
@@ -34,7 +38,7 @@ def start_oauth(client_id: str, client_secret: str, session_state: Any) -> str:
     if not client_id or not client_secret: raise ValueError("Configure [google].client_id and [google].client_secret in Streamlit Secrets.")
     flow = Flow.from_client_config({"web":{"client_id":client_id,"client_secret":client_secret,
       "auth_uri":"https://accounts.google.com/o/oauth2/auth","token_uri":"https://oauth2.googleapis.com/token",
-      "redirect_uris":[REDIRECT_URI]}},scopes=SCOPES,redirect_uri=REDIRECT_URI)
+      "redirect_uris":[get_redirect_uri()]}},scopes=SCOPES,redirect_uri=get_redirect_uri())
     url,state=flow.authorization_url(access_type="offline",include_granted_scopes="true",prompt="consent",
                                      code_challenge_method="S256")
     # PKCE verifier is required when exchanging the authorization code and must
@@ -67,8 +71,8 @@ def finish_oauth(
         {"web":{"client_id":client_id,"client_secret":client_secret,
           "auth_uri":"https://accounts.google.com/o/oauth2/auth",
           "token_uri":"https://oauth2.googleapis.com/token",
-          "redirect_uris":[REDIRECT_URI]}},
-        scopes=SCOPES, state=state, redirect_uri=REDIRECT_URI,
+          "redirect_uris":[get_redirect_uri()]}},
+        scopes=SCOPES, state=state, redirect_uri=get_redirect_uri(),
         code_verifier=code_verifier,
     )
     # Google may return canonical OIDC scope URLs (userinfo.email/profile)

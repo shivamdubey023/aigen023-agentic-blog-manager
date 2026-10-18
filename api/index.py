@@ -14,9 +14,14 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from core import database as db
+from core.env_config import (
+    get_google_client_id, get_google_client_secret, get_google_redirect_uri,
+    get_groq_key, get_gemini_key, get_cohere_key, get_openai_key, get_anthropic_key,
+)
 from core.image_generator import create_image_prompt_for_topic, featured_image_html, generate_featured_image_url
-from core.llm_engine import SUPPORTED_PROVIDERS, generate_technical_article
+from core.llm_engine import SUPPORTED_PROVIDERS, generate_technical_article, resolve_key_for_provider
 from core.rewriter import html_to_clean_text, rewrite_blog_for_adsense
+from core.trending_topics import get_random_trending_topic, list_all_trending_topics
 from property_a_blog.blogger_client import (
     BLOG_URL, create_draft, finish_oauth, get_credentials, list_blogs, list_posts,
     oauth_error_hint, search_console_report, start_oauth,
@@ -30,8 +35,8 @@ db.init_db()
 
 app = FastAPI(
     title="NextGen Tech Notes AI Agentic Hub",
-    description="Multi-model AI technical blogging, SEO optimization, and monetization platform.",
-    version="2.0.0",
+    description="Multi-model AI technical blogging automation, AdSense quality enhancer, and eBook monetization engine.",
+    version="2.1.0",
 )
 
 app.add_middleware(
@@ -42,26 +47,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Helper to resolve API keys from request or environment
-def resolve_api_key(provider: str, passed_key: str | None = None) -> str:
-    if passed_key and passed_key.strip():
-        return passed_key.strip()
-    env_keys = {
-        "gemini": ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
-        "groq": ["GROQ_API_KEY"],
-        "cohere": ["COHERE_API_KEY"],
-        "openai": ["OPENAI_API_KEY"],
-        "anthropic": ["ANTHROPIC_API_KEY", "CLAUDE_API_KEY"],
-    }
-    for env_var in env_keys.get(provider.lower(), []):
-        val = os.environ.get(env_var, "").strip()
-        if val:
-            return val
-    return ""
-
 # Request Models
 class GenerateArticleRequest(BaseModel):
-    provider: str = Field(default="gemini", description="AI provider")
+    provider: str = Field(default="groq", description="AI provider")
     model: Optional[str] = Field(default=None, description="Specific model ID")
     api_key: Optional[str] = Field(default="", description="Provider API key")
     topic: str = Field(..., min_length=2, description="Topic or title")
@@ -70,7 +58,7 @@ class GenerateArticleRequest(BaseModel):
     notes: Optional[str] = Field(default="", description="Technical notes & requirements")
 
 class RewriteArticleRequest(BaseModel):
-    provider: str = Field(default="gemini")
+    provider: str = Field(default="groq")
     model: Optional[str] = None
     api_key: Optional[str] = ""
     original_title: str
@@ -89,7 +77,7 @@ class RenderArticleRequest(BaseModel):
     title: str
     primary_keyword: Optional[str] = ""
     include_toc: Optional[bool] = True
-    include_ebook: Optional[bool] = False
+    include_ebook: Optional[bool] = True
     ebook_url: Optional[str] = "https://codetocareer52.myinstamojo.com/product/code-to-career"
     ebook_title: Optional[str] = "Code to Career — The Python Fresher to Job-Ready Developer"
     ebook_price: Optional[str] = "₹499"
@@ -119,6 +107,14 @@ class SaveAffiliateRequest(BaseModel):
     disclosure: str
     affiliate_id: Optional[int] = None
 
+class AutopilotRequest(BaseModel):
+    topic: Optional[str] = ""
+    primary_keyword: Optional[str] = ""
+    provider: Optional[str] = "groq"
+    include_ebook: Optional[bool] = True
+    upload_to_blogger: Optional[bool] = False
+    blog_id: Optional[str] = ""
+
 # API Routes
 @app.get("/api/health")
 def health_check():
@@ -131,27 +127,138 @@ def health_check():
 
 @app.get("/api/providers")
 def get_providers():
-    """Return available AI models and their configuration."""
-    configured = {}
-    for prov in SUPPORTED_PROVIDERS:
-        key = resolve_api_key(prov)
-        configured[prov] = bool(key)
+    """Return available AI models and report which have keys in .env."""
+    configured = {
+        "groq": bool(get_groq_key()),
+        "gemini": bool(get_gemini_key()),
+        "cohere": bool(get_cohere_key()),
+        "openai": bool(get_openai_key()),
+        "anthropic": bool(get_anthropic_key()),
+    }
     return {
         "providers": SUPPORTED_PROVIDERS,
         "configured": configured,
+        "recommended": "groq" if configured["groq"] else ("gemini" if configured["gemini"] else "groq"),
     }
+
+@app.get("/api/trending")
+def get_trending_topics():
+    """Return trending tech topics designed to rank and produce high AdSense CPC."""
+    return {
+        "topics": list_all_trending_topics(),
+        "random_suggestion": get_random_trending_topic(),
+    }
+
+@app.post("/api/autopilot")
+def run_autopilot(req: AutopilotRequest):
+    """
+    One-click autonomous agent loop:
+    1. Selects or takes a trending topic.
+    2. Generates humanized 1,500+ word technical tutorial with real code.
+    3. Creates a permanent AI featured image banner.
+    4. Injects TOC, TechArticle & FAQPage Schema, and Instamojo eBook card.
+    5. Saves draft to database and optionally creates a Blogger draft!
+    """
+    chosen_provider = req.provider or "groq"
+    if not resolve_key_for_provider(chosen_provider):
+        # Fallback to gemini if groq is missing, or vice versa
+        if resolve_key_for_provider("gemini"):
+            chosen_provider = "gemini"
+        elif resolve_key_for_provider("groq"):
+            chosen_provider = "groq"
+
+    if not req.topic:
+        suggested = get_random_trending_topic()
+        topic = suggested["topic"]
+        keyword = suggested["keyword"]
+    else:
+        topic = req.topic
+        keyword = req.primary_keyword or req.topic
+
+    try:
+        # 1. Generate humanized article
+        draft = generate_technical_article(
+            provider=chosen_provider,
+            topic=topic,
+            primary_keyword=keyword,
+            audience="Working developer",
+            notes="Write in a natural, opinionated human voice. Include clear prerequisites, full reproducible code, a realistic failure traceback with fix, verification checklist, and an FAQ section.",
+        )
+        title_match = re.search(r"(?m)^#\s+(.+)$", draft)
+        title = title_match.group(1).strip() if title_match else topic
+
+        # 2. Generate free featured image
+        img_prompt = create_image_prompt_for_topic(topic)
+        image_url = generate_featured_image_url(img_prompt)
+        img_html = featured_image_html(image_url, alt_text=title)
+
+        # 3. eBook card
+        ebook_snippet = ""
+        if req.include_ebook:
+            ebook_snippet = ebook_card_box(
+                title="Code to Career — The Python Fresher to Job-Ready Developer",
+                product_url="https://codetocareer52.myinstamojo.com/product/code-to-career",
+                price="₹499",
+            )
+
+        # 4. Render HTML with schema and TOC
+        rendered, schema = render_article(
+            draft,
+            title,
+            keyword,
+            include_toc=True,
+            ebook_html=ebook_snippet,
+            featured_image_html=img_html,
+        )
+
+        # 5. Save to database
+        article_id = db.save_article(
+            topic=topic,
+            primary_keyword=keyword,
+            title=title,
+            markdown_body=draft,
+            rendered_html=rendered,
+            schema_json=schema,
+            status="DRAFT",
+        )
+
+        blogger_res = None
+        if req.upload_to_blogger and req.blog_id:
+            creds = SESSION_CREDENTIALS.get("creds")
+            if creds:
+                blogger_res = create_draft(creds, req.blog_id, title, rendered)
+
+        warnings = content_quality_checks(title, draft)
+        word_count = len(re.findall(r"\b[\w'-]+\b", draft))
+
+        return {
+            "success": True,
+            "article_id": article_id,
+            "title": title,
+            "topic": topic,
+            "keyword": keyword,
+            "word_count": word_count,
+            "image_url": image_url,
+            "markdown": draft,
+            "rendered_html": rendered,
+            "warnings": warnings,
+            "blogger_result": blogger_res,
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Autopilot generation failed: {str(exc)}")
 
 @app.post("/api/generate")
 def generate_article(req: GenerateArticleRequest):
-    key = resolve_api_key(req.provider, req.api_key)
+    provider = req.provider or "groq"
+    key = resolve_key_for_provider(provider, req.api_key)
     if not key:
         raise HTTPException(
             status_code=400,
-            detail=f"Missing API key for {req.provider}. Provide in Settings or request.",
+            detail=f"Missing API key for {provider}. Add it to your .env file or settings.",
         )
     try:
         draft = generate_technical_article(
-            provider=req.provider,
+            provider=provider,
             model=req.model,
             api_key=key,
             topic=req.topic,
@@ -175,15 +282,16 @@ def generate_article(req: GenerateArticleRequest):
 
 @app.post("/api/rewrite")
 def rewrite_article(req: RewriteArticleRequest):
-    key = resolve_api_key(req.provider, req.api_key)
+    provider = req.provider or "groq"
+    key = resolve_key_for_provider(provider, req.api_key)
     if not key:
         raise HTTPException(
             status_code=400,
-            detail=f"Missing API key for {req.provider}.",
+            detail=f"Missing API key for {provider}. Add it to your .env file.",
         )
     try:
         rewritten = rewrite_blog_for_adsense(
-            provider=req.provider,
+            provider=provider,
             model=req.model,
             api_key=key,
             original_title=req.original_title,
@@ -313,31 +421,51 @@ def create_affiliate(req: SaveAffiliateRequest):
 # Blogger & OAuth Routes
 SESSION_CREDENTIALS: dict[str, Any] = {}
 
+def get_canonical_callback_url(request: Request, passed_redirect: str = "") -> str:
+    if passed_redirect and passed_redirect.strip():
+        return passed_redirect.strip()
+    env_redirect = get_google_redirect_uri()
+    if env_redirect and "streamlit" not in env_redirect.lower() and "your-app" not in env_redirect.lower():
+        return env_redirect
+    proto = request.headers.get("x-forwarded-proto", request.url.scheme)
+    host = request.headers.get("x-forwarded-host", request.headers.get("host", request.url.netloc))
+    if host.startswith("localhost") or host.startswith("127.0.0.1"):
+        return f"{proto}://{host}/api/oauth/callback"
+    return f"https://{host}/api/oauth/callback"
+
 @app.get("/api/oauth/url")
-def get_oauth_url():
-    client_id = os.environ.get("GOOGLE_CLIENT_ID", "").strip()
-    client_secret = os.environ.get("GOOGLE_CLIENT_SECRET", "").strip()
+def get_oauth_url(request: Request, redirect_uri: str = ""):
+    client_id = get_google_client_id()
+    client_secret = get_google_client_secret()
     if not client_id or not client_secret:
-        raise HTTPException(status_code=400, detail="Missing GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET in server environment.")
+        raise HTTPException(status_code=400, detail="Missing Google client_id or client_secret in .env.")
+    
+    target_redirect = get_canonical_callback_url(request, redirect_uri)
+
     dummy_session: dict[str, Any] = {}
-    auth_url = start_oauth(client_id, client_secret, dummy_session)
-    return {"url": auth_url}
+    auth_url = start_oauth(client_id, client_secret, dummy_session, redirect_uri=target_redirect)
+    SESSION_CREDENTIALS["target_redirect"] = target_redirect
+    return {
+        "url": auth_url,
+        "redirect_uri": target_redirect,
+        "instruction": f"Add '{target_redirect}' to Authorized redirect URIs in Google Cloud Console.",
+    }
 
 @app.get("/api/oauth/callback")
-def handle_oauth_callback(code: str = "", state: str = ""):
-    client_id = os.environ.get("GOOGLE_CLIENT_ID", "").strip()
-    client_secret = os.environ.get("GOOGLE_CLIENT_SECRET", "").strip()
+def handle_oauth_callback(request: Request, code: str = "", state: str = ""):
+    client_id = get_google_client_id()
+    client_secret = get_google_client_secret()
+    target_redirect = SESSION_CREDENTIALS.get("target_redirect") or get_canonical_callback_url(request)
     if not client_id or not client_secret:
-        return HTMLResponse("<h3>Missing Google OAuth credentials.</h3>", status_code=400)
+        return HTMLResponse("<h3>Missing Google OAuth credentials in .env.</h3>", status_code=400)
     try:
         dummy_session: dict[str, Any] = {}
-        creds = finish_oauth(code, state, dummy_session, client_id=client_id, client_secret=client_secret)
+        creds = finish_oauth(code, state, dummy_session, client_id=client_id, client_secret=client_secret, redirect_uri=target_redirect)
         SESSION_CREDENTIALS["creds"] = creds
         SESSION_CREDENTIALS["user"] = dummy_session.get("google_user", {})
-        # Redirect back to app
         return RedirectResponse(url="/?oauth_success=1")
     except Exception as exc:
-        return HTMLResponse(f"<h3>OAuth error: {html.escape(str(exc))}</h3>", status_code=500)
+        return HTMLResponse(f"<h3>OAuth error: {html.escape(str(exc))}</h3><p>Redirect URI used: <code>{target_redirect}</code></p>", status_code=500)
 
 @app.get("/api/oauth/status")
 def oauth_status():
@@ -346,6 +474,7 @@ def oauth_status():
     return {
         "connected": bool(creds and getattr(creds, "valid", False)),
         "user": user,
+        "configured_redirect_uri": get_google_redirect_uri(),
     }
 
 @app.get("/api/blogger/blogs")

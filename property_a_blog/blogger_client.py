@@ -11,15 +11,17 @@ from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
+from core.env_config import get_google_redirect_uri, get_google_client_id, get_google_client_secret
+
 BLOGGER_SCOPE = "https://www.googleapis.com/auth/blogger"
 SEARCH_CONSOLE_SCOPE = "https://www.googleapis.com/auth/webmasters.readonly"
 IDENTITY_SCOPES = ["openid", "https://www.googleapis.com/auth/userinfo.email", "https://www.googleapis.com/auth/userinfo.profile"]
 SCOPES = IDENTITY_SCOPES + [BLOGGER_SCOPE, SEARCH_CONSOLE_SCOPE]
 BLOG_URL = "https://aigen023.blogspot.com/"
-REDIRECT_URI = "https://aigen023-blog-manager.streamlit.app/"
+REDIRECT_URI = "https://your-app.vercel.app/api/oauth/callback"
 
 def get_redirect_uri() -> str:
-    return os.environ.get("GOOGLE_OAUTH_REDIRECT_URI", REDIRECT_URI).strip() or REDIRECT_URI
+    return os.environ.get("GOOGLE_OAUTH_REDIRECT_URI", "").strip() or get_google_redirect_uri() or REDIRECT_URI
 
 def get_credentials(session_state: Any) -> Credentials | None:
     token = session_state.get("google_api_token")
@@ -34,16 +36,18 @@ def get_credentials(session_state: Any) -> Credentials | None:
         session_state.pop("google_api_token", None)
         return None
 
-def start_oauth(client_id: str, client_secret: str, session_state: Any) -> str:
-    if not client_id or not client_secret: raise ValueError("Configure [google].client_id and [google].client_secret in Streamlit Secrets.")
+def start_oauth(client_id: str, client_secret: str, session_state: Any, redirect_uri: str | None = None) -> str:
+    client_id = client_id or get_google_client_id()
+    client_secret = client_secret or get_google_client_secret()
+    target_redirect = redirect_uri or get_redirect_uri()
+    if not client_id or not client_secret: raise ValueError("Configure client_id and client_secret in .env or settings.")
     flow = Flow.from_client_config({"web":{"client_id":client_id,"client_secret":client_secret,
       "auth_uri":"https://accounts.google.com/o/oauth2/auth","token_uri":"https://oauth2.googleapis.com/token",
-      "redirect_uris":[get_redirect_uri()]}},scopes=SCOPES,redirect_uri=get_redirect_uri())
+      "redirect_uris":[target_redirect]}},scopes=SCOPES,redirect_uri=target_redirect)
     url,state=flow.authorization_url(access_type="offline",include_granted_scopes="true",prompt="consent",
                                      code_challenge_method="S256")
-    # PKCE verifier is required when exchanging the authorization code and must
-    # survive Google's full-page redirect / Streamlit session reset.
     db.store_oauth_state(state, flow.code_verifier or "")
+    session_state["used_redirect_uri"] = target_redirect
     return url
 
 def finish_oauth(
@@ -52,27 +56,31 @@ def finish_oauth(
     session_state: Any,
     client_id: str | None = None,
     client_secret: str | None = None,
+    redirect_uri: str | None = None,
 ) -> Credentials:
     """Exchange OAuth callback code with backwards-compatible argument ordering."""
+    client_id = client_id or get_google_client_id()
+    client_secret = client_secret or get_google_client_secret()
     if not client_id or not client_secret:
         try:
             import streamlit as st
             google_config = dict(st.secrets.get("google", {}))
+            client_id = client_id or str(google_config.get("client_id", ""))
+            client_secret = client_secret or str(google_config.get("client_secret", ""))
         except Exception:
-            google_config = {}
-        client_id = client_id or str(google_config.get("client_id", ""))
-        client_secret = client_secret or str(google_config.get("client_secret", ""))
+            pass
     if not client_id or not client_secret:
-        raise ValueError("Configure [google].client_id and [google].client_secret in Streamlit Secrets.")
+        raise ValueError("Configure client_id and client_secret in .env or settings.")
     code_verifier = db.consume_oauth_state(state)
     if not code or not state or not code_verifier:
         raise ValueError("OAuth state or PKCE verifier is missing, expired, or already used. Restart Google login.")
+    target_redirect = redirect_uri or session_state.get("used_redirect_uri") or get_redirect_uri()
     flow = Flow.from_client_config(
         {"web":{"client_id":client_id,"client_secret":client_secret,
           "auth_uri":"https://accounts.google.com/o/oauth2/auth",
           "token_uri":"https://oauth2.googleapis.com/token",
-          "redirect_uris":[get_redirect_uri()]}},
-        scopes=SCOPES, state=state, redirect_uri=get_redirect_uri(),
+          "redirect_uris":[target_redirect]}},
+        scopes=SCOPES, state=state, redirect_uri=target_redirect,
         code_verifier=code_verifier,
     )
     # Google may return canonical OIDC scope URLs (userinfo.email/profile)

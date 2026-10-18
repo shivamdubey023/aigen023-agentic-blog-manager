@@ -56,6 +56,9 @@ def init_db() -> None:
           trigger_keywords TEXT NOT NULL DEFAULT '[]', tracking_url TEXT NOT NULL,
           disclosure_snippet TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS oauth_states (
+          state TEXT PRIMARY KEY, created_at TEXT NOT NULL
+        );
         """)
 
 def save_article(*, topic: str, primary_keyword: str, title: str, markdown_body: str,
@@ -179,3 +182,27 @@ def list_affiliates() -> list[dict[str, Any]]:
         except (TypeError,json.JSONDecodeError): item["trigger_keywords_list"] = []
         result.append(item)
     return result
+
+def store_oauth_state(state: str) -> None:
+    """Persist a short-lived OAuth CSRF state across the external Google redirect."""
+    now = utc_now()
+    with connection() as conn:
+        conn.execute("DELETE FROM oauth_states WHERE created_at < datetime('now', '-15 minutes')")
+        conn.execute("INSERT OR REPLACE INTO oauth_states(state,created_at) VALUES(?,?)", (state, now))
+
+def consume_oauth_state(state: str) -> bool:
+    """Validate and consume OAuth state once, allowing for browser reconnects."""
+    if not state:
+        return False
+    with connection() as conn:
+        row = conn.execute("SELECT created_at FROM oauth_states WHERE state=?", (state,)).fetchone()
+        if not row:
+            return False
+        conn.execute("DELETE FROM oauth_states WHERE state=?", (state,))
+        try:
+            created = datetime.fromisoformat(row["created_at"])
+            if (datetime.now(timezone.utc) - created).total_seconds() > 900:
+                return False
+        except (ValueError, TypeError):
+            return False
+        return True

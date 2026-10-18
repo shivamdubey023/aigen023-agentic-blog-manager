@@ -72,7 +72,32 @@ def init_db() -> None:
         CREATE TABLE IF NOT EXISTS oauth_states (
           state TEXT PRIMARY KEY, created_at TEXT NOT NULL, code_verifier TEXT NOT NULL DEFAULT ''
         );
+        CREATE TABLE IF NOT EXISTS system_credentials (
+          key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS user_products (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          title TEXT NOT NULL,
+          url TEXT NOT NULL,
+          price TEXT NOT NULL DEFAULT '',
+          description TEXT NOT NULL DEFAULT '',
+          badge TEXT NOT NULL DEFAULT 'Recommended Guide',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
         """)
+        # Seed initial product if empty
+        cur = conn.execute("SELECT COUNT(*) AS c FROM user_products")
+        if cur.fetchone()["c"] == 0:
+            now = utc_now()
+            conn.execute("""INSERT INTO user_products (title, url, price, description, badge, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                ("Code to Career — The Python Fresher to Job-Ready Developer",
+                 "https://codetocareer52.myinstamojo.com/product/code-to-career",
+                 "₹499",
+                 "Fast-track from beginner to an interview-ready, high-earning Python developer with 25+ real projects and mock guides.",
+                 "★ Recommended Guide",
+                 now, now))
         # Migrate existing databases created before PKCE support.
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(oauth_states)").fetchall()}
         if "code_verifier" not in columns:
@@ -200,6 +225,41 @@ def list_affiliates() -> list[dict[str, Any]]:
         result.append(item)
     return result
 
+def delete_affiliate(affiliate_id: int) -> bool:
+    with connection() as conn:
+        cur = conn.execute("DELETE FROM affiliate_vault WHERE id=?", (affiliate_id,))
+        return cur.rowcount > 0
+
+def list_products() -> list[dict[str, Any]]:
+    with connection() as conn:
+        rows = conn.execute("SELECT * FROM user_products ORDER BY updated_at DESC").fetchall()
+        return [dict(r) for r in rows]
+
+def get_product(product_id: int) -> dict[str, Any] | None:
+    with connection() as conn:
+        row = conn.execute("SELECT * FROM user_products WHERE id=?", (product_id,)).fetchone()
+        return dict(row) if row else None
+
+def save_product(*, title: str, url: str, price: str = "", description: str = "",
+                 badge: str = "Recommended Guide", product_id: int | None = None) -> int:
+    now = utc_now()
+    with connection() as conn:
+        if product_id:
+            cur = conn.execute("""UPDATE user_products SET title=?, url=?, price=?, description=?, badge=?, updated_at=?
+                WHERE id=?""", (title.strip(), url.strip(), price.strip(), description.strip(), badge.strip(), now, product_id))
+            if cur.rowcount == 0:
+                raise ValueError("Product not found")
+            return product_id
+        cur = conn.execute("""INSERT INTO user_products (title, url, price, description, badge, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (title.strip(), url.strip(), price.strip(), description.strip(), badge.strip(), now, now))
+        return int(cur.lastrowid)
+
+def delete_product(product_id: int) -> bool:
+    with connection() as conn:
+        cur = conn.execute("DELETE FROM user_products WHERE id=?", (product_id,))
+        return cur.rowcount > 0
+
 def store_oauth_state(state: str, code_verifier: str = "") -> None:
     """Persist short-lived OAuth state and its PKCE verifier across the Google redirect."""
     now = utc_now()
@@ -225,3 +285,14 @@ def consume_oauth_state(state: str) -> str | None:
             return None
         verifier = row["code_verifier"]
         return verifier or None
+
+def save_system_credential(key: str, value: str) -> None:
+    now = utc_now()
+    with connection() as conn:
+        conn.execute("INSERT OR REPLACE INTO system_credentials(key, value, updated_at) VALUES(?,?,?)",
+                     (key, value, now))
+
+def get_system_credential(key: str) -> str | None:
+    with connection() as conn:
+        row = conn.execute("SELECT value FROM system_credentials WHERE key=?", (key,)).fetchone()
+        return row["value"] if row else None

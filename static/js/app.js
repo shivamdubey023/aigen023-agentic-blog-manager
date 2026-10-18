@@ -124,6 +124,27 @@ function showToast(message, type = 'info') {
   }, 4000);
 }
 
+const PROVIDER_MODELS = {
+  gemini: ['gemini-3.8-flash', 'gemini-1.5-flash'],
+  groq: ['openai/gpt-oss-120b', 'openai/gpt-oss-20b', 'qwen/qwen3.8-27b'],
+  cohere: ['command-r-08-2024', 'command-r-plus-08-2024'],
+  openai: ['gpt-4o', 'gpt-4o-mini'],
+  anthropic: ['claude-3-5-sonnet-20241022', 'claude-3-5-haiku-20241022'],
+};
+
+if (el.genProvider) {
+  el.genProvider.addEventListener('change', (e) => {
+    const models = PROVIDER_MODELS[e.target.value] || [];
+    el.genModel.innerHTML = '';
+    models.forEach(m => {
+      const opt = document.createElement('option');
+      opt.value = m;
+      opt.textContent = m;
+      el.genModel.appendChild(opt);
+    });
+  });
+}
+
 // Tab Switching
 function switchTab(tabId) {
   el.tabs.forEach(t => t.classList.toggle('active', t.dataset.tab === tabId));
@@ -239,6 +260,30 @@ el.btnOpenAutopilotInEditor.addEventListener('click', () => {
   switchTab('tab-editor');
   renderPreview();
 });
+
+// Fetch Blogger Posts for Rewriter
+if (el.btnFetchBloggerPosts) {
+  el.btnFetchBloggerPosts.addEventListener('click', async () => {
+    if (!state.googleConnected) {
+      showToast('Please connect your Google account first!', 'error');
+      return;
+    }
+    showToast('Fetching your Blogger posts...', 'info');
+    try {
+      if (!state.activeBlogId) {
+        await loadBloggerBlogs();
+      }
+      if (state.activeBlogId) {
+        await loadBloggerPosts(state.activeBlogId);
+        showToast('Blogger posts loaded into rewriter!', 'success');
+      } else {
+        showToast('No Blogger blogs found for this account.', 'error');
+      }
+    } catch (err) {
+      showToast('Failed to load posts: ' + err.message, 'error');
+    }
+  });
+}
 
 // AdSense Content Rewriter
 el.btnRunRewrite.addEventListener('click', async () => {

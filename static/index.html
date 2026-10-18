@@ -86,9 +86,9 @@
                 <div class="form-group flex-1">
                   <label for="autopilot-provider">AI Model Engine (from .env)</label>
                   <select id="autopilot-provider" class="form-control">
-                    <option value="groq" selected>Groq Cloud (Llama 3.3 70B - Free & Fast)</option>
-                    <option value="gemini">Google Gemini 2.5 Flash (Free Tier)</option>
-                    <option value="cohere">Cohere Command R</option>
+                    <option value="groq" selected>Groq Cloud (openai/gpt-oss-120b · Ultra Fast & Free)</option>
+                    <option value="gemini">Google Gemini 3.8 Flash (Active Free Tier · High Quality)</option>
+                    <option value="cohere">Cohere (command-r-08-2024 · High Rigor)</option>
                   </select>
                 </div>
                 <div class="form-group flex-1">
@@ -97,18 +97,38 @@
                 </div>
               </div>
 
-              <div class="autopilot-toggles">
-                <label class="toggle-control">
-                  <input type="checkbox" id="autopilot-toggle-ebook" checked>
-                  <span>Inject Instamojo eBook Card (Code to Career)</span>
-                </label>
+              <!-- Monetization / Product Attachment Selector -->
+              <div class="form-row mt-12">
+                <div class="form-group flex-1">
+                  <label for="autopilot-monetize-type">Monetization / Recommendations</label>
+                  <select id="autopilot-monetize-type" class="form-control">
+                    <option value="none" selected>🛡️ Pure Technical Post (No Products - Best for AdSense Approval)</option>
+                    <option value="product">📘 Attach My Product / eBook (e.g. Instamojo)</option>
+                    <option value="affiliate">🔗 Attach Affiliate Recommendation</option>
+                  </select>
+                </div>
+                <div class="form-group flex-1 hidden" id="autopilot-product-select-group">
+                  <label for="autopilot-product-select">Select Product to Attach</label>
+                  <select id="autopilot-product-select" class="form-control">
+                    <option value="">-- Choose Product --</option>
+                  </select>
+                </div>
+                <div class="form-group flex-1 hidden" id="autopilot-affiliate-select-group">
+                  <label for="autopilot-affiliate-select">Select Affiliate to Attach</label>
+                  <select id="autopilot-affiliate-select" class="form-control">
+                    <option value="">-- Choose Affiliate Link --</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="autopilot-toggles mt-10">
                 <label class="toggle-control">
                   <input type="checkbox" id="autopilot-toggle-blogger">
-                  <span>Auto-Upload to Blogger Drafts</span>
+                  <span>Auto-Upload to Blogger Drafts (when Blogger is connected)</span>
                 </label>
               </div>
 
-              <button class="btn btn-primary btn-large full-width" id="btn-run-autopilot">
+              <button class="btn btn-primary btn-large full-width mt-12" id="btn-run-autopilot">
                 <span class="btn-spinner hidden" id="autopilot-spinner"></span>
                 🚀 Launch 1-Click Autopilot Generator &rarr;
               </button>
@@ -143,7 +163,7 @@
               <label for="rewrite-blogger-select">Select Post from Blogger</label>
               <div class="input-with-button">
                 <select id="rewrite-blogger-select" class="form-control">
-                  <option value="">-- Click "Fetch Blogger Posts" to load --</option>
+                  <option value="">-- Click "Load Posts" to fetch from Blogger --</option>
                 </select>
                 <button class="btn btn-secondary btn-sm" id="btn-fetch-blogger-posts">Load Posts</button>
               </div>
@@ -195,17 +215,17 @@
               <div class="form-group flex-1">
                 <label for="gen-provider">AI Model Engine</label>
                 <select id="gen-provider" class="form-control">
-                  <option value="groq" selected>Groq (Llama 3.3 70B - Free)</option>
-                  <option value="gemini">Google Gemini 2.5 Flash (Free)</option>
-                  <option value="cohere">Cohere Command R</option>
+                  <option value="groq" selected>Groq Cloud (Free & Ultra Fast)</option>
+                  <option value="gemini">Google Gemini 3.8 Flash (Free Tier)</option>
+                  <option value="cohere">Cohere (command-r-08-2024)</option>
                   <option value="openai">OpenAI ChatGPT</option>
-                  <option value="anthropic">Claude 3.5 Sonnet</option>
+                  <option value="anthropic">Anthropic Claude</option>
                 </select>
               </div>
               <div class="form-group flex-1">
                 <label for="gen-model">Model Version</label>
                 <select id="gen-model" class="form-control">
-                  <option value="llama-3.3-70b-versatile">llama-3.3-70b-versatile</option>
+                  <option value="openai/gpt-oss-120b">openai/gpt-oss-120b</option>
                 </select>
               </div>
             </div>
@@ -263,8 +283,8 @@
                 <span>TOC</span>
               </label>
               <label class="toggle-control">
-                <input type="checkbox" id="toggle-ebook" checked>
-                <span>eBook</span>
+                <input type="checkbox" id="toggle-ebook">
+                <span>Product</span>
               </label>
               <button class="btn btn-secondary btn-sm" id="btn-refresh-preview">Refresh</button>
               <button class="btn btn-primary btn-sm" id="btn-save-db">Save Draft</button>
@@ -313,7 +333,7 @@
             <h2>100% Free AI Blog Cover Studio</h2>
             <span class="badge green">Zero API Key Needed</span>
           </div>
-          <p class="section-desc">Generate crisp, high-resolution (1200x630) featured covers using Pollinations.ai that stay online permanently.</p>
+          <p class="section-desc">Generate crisp, high-resolution (1200x630) featured covers using Pollinations.ai that stay online permanently with zero watermarks.</p>
 
           <div class="form-group">
             <label for="img-topic-input">Tutorial Topic</label>
@@ -344,27 +364,61 @@
         </div>
       </section>
 
-      <!-- TAB 6: INSTAMOJO & AFFILIATES -->
+      <!-- TAB 6: MY PRODUCTS & AFFILIATES VAULT -->
       <section class="tab-pane" id="tab-monetize">
         <div class="grid-2col">
+          <!-- Column 1: My Products (eBooks / Guides / Instamojo) -->
           <div class="card glass-card">
             <div class="card-header">
-              <h2>Instamojo eBook CTA Box</h2>
-              <span class="badge green">Live Active</span>
+              <h2>My Products & Books</h2>
+              <span class="badge green">Instamojo / Direct</span>
             </div>
-            <p class="section-desc">This responsive card is automatically injected into relevant posts to drive readers straight to your Instamojo store.</p>
-            <div id="ebook-live-preview"></div>
+            <p class="section-desc">Add your eBooks or guides here. You can attach any of them to your technical posts when appropriate.</p>
+            
+            <form id="product-form" class="mb-20">
+              <div class="form-group">
+                <label for="prod-title">Product Title</label>
+                <input type="text" id="prod-title" class="form-control" placeholder="e.g. Code to Career — Python Fresher to Job-Ready" required>
+              </div>
+              <div class="form-row">
+                <div class="form-group flex-1">
+                  <label for="prod-url">Store / Checkout URL</label>
+                  <input type="url" id="prod-url" class="form-control" placeholder="https://codetocareer52.myinstamojo.com/..." required>
+                </div>
+                <div class="form-group flex-1">
+                  <label for="prod-price">Price</label>
+                  <input type="text" id="prod-price" class="form-control" placeholder="₹499">
+                </div>
+              </div>
+              <div class="form-group">
+                <label for="prod-desc">Short Description / Pitch</label>
+                <input type="text" id="prod-desc" class="form-control" placeholder="Zero to placement blueprint with 25+ real projects & interview roadmap">
+              </div>
+              <button type="submit" class="btn btn-primary full-width" id="btn-save-product">Add Product to Vault &rarr;</button>
+            </form>
+
+            <div class="products-list-wrapper">
+              <h4 style="margin: 16px 0 8px 0; font-size: 14px; color: #94a3b8;">Saved Products:</h4>
+              <div id="products-table-container"></div>
+            </div>
+
+            <div class="mt-20">
+              <h4 style="margin: 0 0 8px 0; font-size: 14px; color: #94a3b8;">Live Card Preview:</h4>
+              <div id="ebook-live-preview"></div>
+            </div>
           </div>
 
+          <!-- Column 2: Affiliate Link Vault -->
           <div class="card glass-card">
             <div class="card-header">
               <h2>Affiliate Link Vault</h2>
               <span class="badge blue">rel="sponsored"</span>
             </div>
+            <p class="section-desc">Manage affiliate recommendations with automatic FTC/AdSense compliant disclosures.</p>
             <form id="affiliate-form">
               <div class="form-group">
                 <label for="aff-name">Product Name</label>
-                <input type="text" id="aff-name" class="form-control" placeholder="e.g. DigitalOcean" required>
+                <input type="text" id="aff-name" class="form-control" placeholder="e.g. DigitalOcean Cloud VPS" required>
               </div>
               <div class="form-group">
                 <label for="aff-url">Tracking URL</label>
@@ -391,23 +445,23 @@
 
           <!-- OAuth Redirect URI Helper to Fix Error 400 -->
           <div class="info-callout" style="border-left-color: var(--color-warning);">
-            <h4 style="color:#fde68a; margin-bottom:6px;">Fixing Error 400: redirect_uri_mismatch</h4>
+            <h4 style="color:#fde68a; margin-bottom:6px;">Google OAuth Configuration</h4>
             <p style="font-size:13px; color:#cbd5e1; margin-bottom:10px;">
-              Google OAuth requires the exact Redirect URI to be registered in your Google Cloud Console. Copy this exact URI below:
+              Your active authorized redirect URI for this deployment is below. Ensure this exact URI is listed in your Google Cloud Console:
             </p>
             <div class="input-with-button">
-              <input type="text" id="oauth-redirect-display" class="form-control font-mono" readonly value="https://aigen023-blog-manager.streamlit.app/oauth2callback">
+              <input type="text" id="oauth-redirect-display" class="form-control font-mono" readonly value="">
               <button class="btn btn-secondary btn-sm" id="btn-copy-redirect">Copy</button>
             </div>
             <p style="font-size:12px; color:#94a3b8; margin-top:8px;">
-              Add this URI in <strong>Google Cloud Console → Credentials → OAuth 2.0 Web Client → Authorized redirect URIs</strong>.
+              Path: <strong>Google Cloud Console → Credentials → OAuth 2.0 Web Client → Authorized redirect URIs</strong>.
             </p>
           </div>
 
           <div class="form-group mt-20">
             <label for="active-blog-selector">Active Blogger Blog</label>
             <select id="active-blog-selector" class="form-control">
-              <option value="">-- Click "Refresh Blogs" to load --</option>
+              <option value="">-- Connect Google to Load Blogs --</option>
             </select>
           </div>
 
@@ -419,7 +473,7 @@
           <div class="blogger-posts-table-wrapper mt-20">
             <h4>Recent Blogger Posts</h4>
             <div id="blogger-posts-container">
-              <p class="text-muted">Connect Google to load your posts.</p>
+              <p class="text-muted">Connect Google or click "Refresh Blog List" to view recent posts.</p>
             </div>
           </div>
         </div>

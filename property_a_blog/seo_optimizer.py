@@ -109,7 +109,7 @@ def ebook_card_box(
 
 def render_article(markdown_text: str, title: str, primary_keyword: str="", *, include_toc: bool=True,
                    description: str="", faq: list[dict[str,str]]|None=None, affiliate_html: str="",
-                   ebook_html: str="", featured_image_html: str="",
+                   ebook_html: str="", featured_image_html: str="", section_image_html: str="",
                    blog_url: str="https://aigen023.blogspot.com/") -> tuple[str,dict[str,Any]]:
     headings = parse_headings(markdown_text)
     text = markdown_text.strip()
@@ -128,6 +128,15 @@ def render_article(markdown_text: str, title: str, primary_keyword: str="", *, i
             body = body[:h1_match.end()] + "\n" + featured_image_html + body[h1_match.end():]
         else:
             body = featured_image_html + "\n" + body
+    if section_image_html:
+        # Inject architectural diagram before the second H2 section
+        h2_matches = list(re.finditer(r"(<h2[^>]*>.*?</h2>)", body, flags=re.I|re.S))
+        if len(h2_matches) >= 2:
+            target_h2 = h2_matches[1]
+            body = body[:target_h2.start()] + "\n" + section_image_html + "\n" + body[target_h2.start():]
+        elif h2_matches:
+            target_h2 = h2_matches[0]
+            body = body[:target_h2.start()] + "\n" + section_image_html + "\n" + body[target_h2.start():]
     if ebook_html:
         body += "\n" + ebook_html
     if affiliate_html:

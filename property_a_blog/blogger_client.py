@@ -23,17 +23,41 @@ REDIRECT_URI = "https://your-app.vercel.app/api/oauth/callback"
 def get_redirect_uri() -> str:
     return os.environ.get("GOOGLE_OAUTH_REDIRECT_URI", "").strip() or get_google_redirect_uri() or REDIRECT_URI
 
-def get_credentials(session_state: Any) -> Credentials | None:
-    token = session_state.get("google_api_token")
-    if not token: return None
+def get_credentials(session_state: Any = None, token_override: Any = None) -> Credentials | None:
+    token = None
+    if token_override:
+        if isinstance(token_override, str):
+            try:
+                token = json.loads(token_override)
+            except Exception:
+                token = None
+        elif isinstance(token_override, dict):
+            token = token_override
+    if not token and session_state:
+        token = session_state.get("google_api_token")
+    if not token:
+        stored = db.get_system_credential("google_api_token")
+        if stored:
+            try:
+                token = json.loads(stored)
+                if session_state:
+                    session_state["google_api_token"] = token
+            except Exception:
+                pass
+    if not token:
+        return None
     try:
         creds = Credentials.from_authorized_user_info(token, SCOPES)
         if creds.expired and creds.refresh_token:
             creds.refresh(Request())
-            session_state["google_api_token"] = json.loads(creds.to_json())
+            new_token = json.loads(creds.to_json())
+            if session_state:
+                session_state["google_api_token"] = new_token
+            db.save_system_credential("google_api_token", json.dumps(new_token))
         return creds if creds.valid else None
     except Exception:
-        session_state.pop("google_api_token", None)
+        if session_state:
+            session_state.pop("google_api_token", None)
         return None
 
 def start_oauth(client_id: str, client_secret: str, session_state: Any, redirect_uri: str | None = None) -> str:
@@ -101,6 +125,8 @@ def finish_oauth(
         raise ValueError("Google did not return a verified email address. Reconnect and approve the email scope.")
     session_state["google_api_token"]=json.loads(creds.to_json())
     session_state["google_user"]={"email":identity["email"],"name":identity.get("name","")}
+    db.save_system_credential("google_api_token", json.dumps(session_state["google_api_token"]))
+    db.save_system_credential("google_user", json.dumps(session_state["google_user"]))
     return creds
 def blogger_service(creds: Credentials):
     if not creds or not creds.valid: raise ValueError("Google API account is not connected or token is invalid.")

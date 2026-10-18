@@ -1,5 +1,5 @@
 """Multi-model AI generation engine supporting Gemini, Groq, Cohere, OpenAI, and Claude.
-Includes advanced Humanized Tone formatting to pass AI detection and satisfy AdSense E-E-A-T.
+Uses active verified 2026 model IDs and intelligent multi-model fallback.
 """
 from __future__ import annotations
 import json
@@ -16,18 +16,18 @@ logger = logging.getLogger(__name__)
 
 SUPPORTED_PROVIDERS = {
     "groq": {
-        "name": "Groq Cloud (100% Free · Ultra Fast)",
-        "models": ["llama-3.3-70b-versatile", "deepseek-r1-distill-llama-70b", "llama-3.1-8b-instant"],
-        "default_model": "llama-3.3-70b-versatile",
+        "name": "Groq Cloud (Free & Ultra Fast)",
+        "models": ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.8-27b"],
+        "default_model": "openai/gpt-oss-120b",
     },
     "gemini": {
         "name": "Google Gemini (Free Tier)",
-        "models": ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-1.5-flash"],
-        "default_model": "gemini-2.5-flash",
+        "models": ["gemini-3.8-flash", "gemini-flash-latest", "gemini-pro-latest"],
+        "default_model": "gemini-3.8-flash",
     },
     "cohere": {
-        "name": "Cohere (Trial / Free Key)",
-        "models": ["command-r-plus-08-2024", "command-r-08-2024"],
+        "name": "Cohere (Free Trial)",
+        "models": ["command-r-08-2024", "command-r-plus-08-2024"],
         "default_model": "command-r-08-2024",
     },
     "openai": {
@@ -43,12 +43,12 @@ SUPPORTED_PROVIDERS = {
 }
 
 HUMANIZED_SYSTEM_PROMPT = """You are a seasoned senior software engineer and technical author writing for NextGen Tech Notes (https://aigen023.blogspot.com/).
-Your tutorials are known for their raw, practical honesty, real production battle scars, and zero-fluff explanations.
+Your tutorials are known for their practical depth, real production examples, and zero-fluff explanations.
 
 CRITICAL: WRITE IN A 100% NATURAL, HUMANIZED DEVELOPER VOICE TO BYPASS AI DETECTORS & PASS ADSENSE QUALITY REVIEW:
 1. Tone and Burstiness:
-   - Write like a real human engineer mentoring a colleague. Vary sentence length dramatically: mix short, punchy, direct sentences with detailed technical reasoning.
-   - Use natural conversational transitions ("Here is where things get tricky", "If you run this now, it will likely fail with...", "In production, we learned this the hard way").
+   - Write like a real human engineer. Vary sentence length dramatically: mix short, punchy statements with detailed technical reasoning.
+   - Use natural conversational transitions ("Here is where things get tricky", "If you run this now, it will fail with...", "In production, we learned this the hard way").
    - NEVER use generic AI buzzwords or filler clichés:
      * BANNED: "In today's fast-paced digital world", "delve into", "dive deep", "testament to", "it is crucial to remember", "a beacon of", "revolutionizing the landscape", "In conclusion", "To wrap things up".
 2. Practical Code & Error Verification:
@@ -57,13 +57,14 @@ CRITICAL: WRITE IN A 100% NATURAL, HUMANIZED DEVELOPER VOICE TO BYPASS AI DETECT
 3. Content Architecture:
    - One clean H1 title at the top.
    - Prerequisites (specific Python/framework versions, OS notes).
-   - Step-by-step implementation.
-   - Troubleshooting & Gotchas (real edge cases developers hit).
-   - Verification checklist.
+   - Architecture & High-Level Workflow breakdown.
+   - Step-by-step production implementation with complete code.
+   - Troubleshooting & Gotchas (real edge cases developers hit in production).
+   - Verification and testing checklist.
    - Frequently Asked Questions (FAQ) section: 3-4 high-intent developer questions with crisp, direct answers.
-   - Official documentation recommendations.
-4. Word Count: Ensure comprehensive depth (aim for 1,400 to 2,200 words).
-5. Output format: Pure Markdown only. No intro banter ("Sure, here is your tutorial") and no outro chit-chat.
+4. Word Count & Depth:
+   - MANDATORY LENGTH: 1,500 to 2,200 words. Never cut sections short or use placeholder comments like "# implement here".
+5. Output format: Pure Markdown only. No conversational intro banter and no outro chit-chat.
 """
 
 def resolve_key_for_provider(provider: str, passed_key: str | None = None) -> str:
@@ -96,17 +97,15 @@ def generate_technical_article(
     temperature: float = 0.45,
     max_tokens: int = 8000,
 ) -> str:
-    """Generate or rewrite an article using the chosen LLM provider."""
+    """
+    Generate or rewrite an article using the chosen LLM provider.
+    Includes automatic intelligent fallback if a model or provider fails.
+    """
     provider = provider.lower().strip()
-    if provider not in SUPPORTED_PROVIDERS:
-        raise ValueError(f"Unsupported AI provider: {provider}. Supported: {list(SUPPORTED_PROVIDERS.keys())}")
-    
-    selected_model = model or SUPPORTED_PROVIDERS[provider]["default_model"]
+    selected_model = model or SUPPORTED_PROVIDERS.get(provider, {}).get("default_model", "openai/gpt-oss-120b")
     resolved_key = resolve_key_for_provider(provider, api_key)
-    if not resolved_key:
-        raise ValueError(f"Missing API key for {provider}. Add '{provider} = \"...\"' in your .env file.")
-    
     system_prompt = custom_system_prompt.strip() or HUMANIZED_SYSTEM_PROMPT
+
     user_prompt = f"""Write an exhaustive, battle-tested, humanized technical tutorial for NextGen Tech Notes.
 Topic: {topic}
 Primary keyword: {primary_keyword or topic}
@@ -120,18 +119,49 @@ Remember:
 - Output pure Markdown only.
 """
 
-    if provider == "groq":
-        return _call_groq(resolved_key, selected_model, system_prompt, user_prompt, temperature, max_tokens)
-    elif provider == "gemini":
-        return _call_gemini(resolved_key, selected_model, system_prompt, user_prompt, temperature, max_tokens)
-    elif provider == "cohere":
-        return _call_cohere(resolved_key, selected_model, system_prompt, user_prompt, temperature, max_tokens)
-    elif provider == "openai":
-        return _call_openai(resolved_key, selected_model, system_prompt, user_prompt, temperature, max_tokens)
-    elif provider == "anthropic":
-        return _call_anthropic(resolved_key, selected_model, system_prompt, user_prompt, temperature, max_tokens)
-    else:
-        raise ValueError(f"Provider handler not implemented: {provider}")
+    errors = []
+
+    # 1. Primary Attempt
+    if resolved_key:
+        try:
+            if provider == "groq":
+                return _call_groq(resolved_key, selected_model, system_prompt, user_prompt, temperature, max_tokens)
+            elif provider == "gemini":
+                return _call_gemini(resolved_key, selected_model, system_prompt, user_prompt, temperature, max_tokens)
+            elif provider == "cohere":
+                return _call_cohere(resolved_key, selected_model, system_prompt, user_prompt, temperature, max_tokens)
+            elif provider == "openai":
+                return _call_openai(resolved_key, selected_model, system_prompt, user_prompt, temperature, max_tokens)
+            elif provider == "anthropic":
+                return _call_anthropic(resolved_key, selected_model, system_prompt, user_prompt, temperature, max_tokens)
+        except Exception as exc:
+            errors.append(f"{provider} ({selected_model}): {exc}")
+
+    # 2. Automatic Fallback: Try Gemini 3.8 Flash
+    gem_key = get_gemini_key()
+    if gem_key and provider != "gemini":
+        try:
+            return _call_gemini(gem_key, "gemini-3.8-flash", system_prompt, user_prompt, temperature, max_tokens)
+        except Exception as exc:
+            errors.append(f"Fallback Gemini: {exc}")
+
+    # 3. Automatic Fallback: Try Groq openai/gpt-oss-120b
+    groq_k = get_groq_key()
+    if groq_k and provider != "groq":
+        try:
+            return _call_groq(groq_k, "openai/gpt-oss-120b", system_prompt, user_prompt, temperature, max_tokens)
+        except Exception as exc:
+            errors.append(f"Fallback Groq: {exc}")
+
+    # 4. Automatic Fallback: Try Cohere command-r-08-2024
+    co_k = get_cohere_key()
+    if co_k and provider != "cohere":
+        try:
+            return _call_cohere(co_k, "command-r-08-2024", system_prompt, user_prompt, temperature, max_tokens)
+        except Exception as exc:
+            errors.append(f"Fallback Cohere: {exc}")
+
+    raise RuntimeError(f"All AI generation attempts failed: {' | '.join(errors)}")
 
 def _call_groq(api_key: str, model: str, system_prompt: str, user_prompt: str, temperature: float, max_tokens: int) -> str:
     url = "https://api.groq.com/openai/v1/chat/completions"
@@ -158,6 +188,9 @@ def _call_groq(api_key: str, model: str, system_prompt: str, user_prompt: str, t
     return choices[0]["message"]["content"].strip()
 
 def _call_gemini(api_key: str, model: str, system_prompt: str, user_prompt: str, temperature: float, max_tokens: int) -> str:
+    # Auto-adjust model name for 2026 availability
+    if "2.5" in model:
+        model = "gemini-3.8-flash"
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     payload = {
         "contents": [

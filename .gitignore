@@ -1,0 +1,8 @@
+.venv/
+__pycache__/
+.env
+.streamlit/secrets.toml
+*.pyc
+data/drafts/*
+data/affiliate_ideas.json
+!data/drafts/.gitkeep

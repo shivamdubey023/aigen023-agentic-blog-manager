@@ -10,7 +10,7 @@ import streamlit as st
 
 from core import database as db
 from property_a_blog.blogger_client import (
-    BLOG_URL, REDIRECT_URI, finish_oauth, get_credentials, list_blogs, list_posts,
+    BLOG_URL, REDIRECT_URI, finish_oauth, get_credentials, list_blogs,
     oauth_error_hint, search_console_report, start_oauth, create_draft,
 )
 from property_a_blog.seo_optimizer import affiliate_box, content_quality_checks, render_article
@@ -77,13 +77,15 @@ with tabs[0]:
     c1.metric("Saved articles",len(db.list_articles()))
     c2.metric("Queued",sum(1 for a in db.list_articles() if a["status"]=="QUEUED"))
     c3.metric("Queue items",len(db.queue_rows()))
-    b1,b2 = st.columns(2)
+    b1,b2,b3 = st.columns(3)
     if b1.button("Start queue", type="primary"):
         db.set_queue_state("RUNNING")
-        st.info("Queue marked RUNNING. This dashboard does not run background jobs continuously; use Process next item to run a bounded, visible action.")
         st.rerun()
     if b2.button("Pause queue"):
         db.set_queue_state("PAUSED")
+        st.rerun()
+    if b3.button("Restart queue"):
+        db.restart_queue()
         st.rerun()
     st.caption("No unattended publishing occurs. Queue execution is user-triggered so every article stays reviewable.")
     queue = db.queue_rows()
@@ -126,11 +128,13 @@ Topic: {topic}
 Primary keyword: {keyword}
 Reader: {audience}
 Author notes and evidence (use only as supplied; flag gaps): {notes or 'None supplied'}
-Requirements: aim for 1,200+ words only where the topic merits it; no generic intro; explain prerequisites,
+Write at least 1,200 substantive words without padding or generic introductory filler. Explain prerequisites,
 version assumptions, exact steps, reproducible code, commands and expected output, failure modes,
 troubleshooting, security caveats, and relevant official documentation URLs only when confident.
-Never claim you ran tests or have personal experience. Never invent logs, results, metrics, citations, or URLs.
-Use Markdown, one H1 followed by meaningful H2/H3 sections, and finish with verification checklist and references to verify.
+Include a representative terminal traceback for a relevant failure when technically useful, label it as an example,
+and never imply it was observed in a real run. Include a syntax-valid corrected example and verification steps.
+Never claim you ran tests or have personal experience. Never invent real test results, metrics, citations, or URLs.
+Use Markdown, one H1 followed by meaningful H2/H3 sections, and finish with a verification checklist and references to verify.
 Mark unsupported facts [VERIFY]. Output article Markdown only."""
                     resp=requests.post("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
                         params={"key":key},json={"contents":[{"parts":[{"text":prompt}]}],
@@ -227,14 +231,38 @@ with tabs[2]:
         st.dataframe(df,use_container_width=True,hide_index=True)
         ids={f"#{a['id']} · {a['title'] or a['topic']}":a["id"] for a in articles}
         selected=st.selectbox("Load an article for editing",list(ids),key="repository_load")
-        if st.button("Load selected article into editor"):
-            a=db.get_article(ids[selected])
-            st.session_state["active_article_id"]=a["id"]
-            st.session_state["editor_markdown"]=a["markdown_body"]
-            st.session_state["editor_title"]=a["title"]
-            st.session_state["editor_topic"]=a["topic"]
-            st.session_state["editor_keyword"]=a["primary_keyword"]
+        chosen_article=db.get_article(ids[selected])
+        action1,action2=st.columns(2)
+        if action1.button("Review / Edit selected article"):
+            st.session_state["active_article_id"]=chosen_article["id"]
+            st.session_state["editor_markdown"]=chosen_article["markdown_body"]
+            st.session_state["editor_title"]=chosen_article["title"]
+            st.session_state["editor_topic"]=chosen_article["topic"]
+            st.session_state["editor_keyword"]=chosen_article["primary_keyword"]
             st.success("Loaded. Open Editor & Publisher tab.")
+        if action2.button("Pause selected article"):
+            db.set_article_status(chosen_article["id"],"PAUSED")
+            st.success("Article paused.")
+            st.rerun()
+        if creds:
+            try:
+                repost_blogs=list_blogs(creds)
+            except Exception as exc:
+                repost_blogs=[]
+                st.warning(f"Could not load Blogger blogs for reposting: {exc}")
+            if repost_blogs:
+                repost_options={f"{b.get('name','Untitled')} · {b.get('url','')}":b for b in repost_blogs}
+                repost_target=st.selectbox("Repost destination (creates a new Blogger draft)",list(repost_options),key="repost_target")
+                repost_confirm=st.checkbox("Confirm creating a separate new Blogger draft; do not replace the original.",key="repost_confirm")
+                if st.button("Repost as new Blogger draft",disabled=not repost_confirm):
+                    try:
+                        rendered,_=render_article(chosen_article["markdown_body"],chosen_article["title"],chosen_article["primary_keyword"])
+                        created=create_draft(creds,repost_options[repost_target]["id"],chosen_article["title"],rendered)
+                        db.save_article(topic=chosen_article["topic"],primary_keyword=chosen_article["primary_keyword"],
+                          title=chosen_article["title"],markdown_body=chosen_article["markdown_body"],rendered_html=rendered,
+                          status="DRAFT",blogger_post_id=created.get("id",""),blogger_blog_id=repost_options[repost_target]["id"])
+                        st.success(f"Created separate Blogger draft. Post ID: {created.get('id','not returned')}")
+                    except Exception as exc: st.error(f"Repost failed: {exc}")
         export=st.download_button("Export repository CSV",df.to_csv(index=False),file_name="nextgen-tech-notes-articles.csv",mime="text/csv")
     else: st.info("No articles saved yet.")
 

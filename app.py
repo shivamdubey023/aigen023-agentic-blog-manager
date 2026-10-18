@@ -50,10 +50,7 @@ def owner_gate() -> str:
                 st.error(f"Could not start Google login: {oauth_error_hint(exc)}")
         st.stop()
     return email
-owner = owner_gate()
-st.title("🛠️ NextGen Tech Notes")
-st.caption("Content operations · human review required · Blogger drafts only")
-creds = get_credentials(st.session_state)
+
 # Process the Blogger/Search Console OAuth callback only when a flow was started here.
 if st.query_params.get("code") and st.session_state.get("google_api_oauth_state"):
     try:
@@ -63,6 +60,11 @@ if st.query_params.get("code") and st.session_state.get("google_api_oauth_state"
     except Exception as exc:
         st.error(f"Google API authorization failed: {oauth_error_hint(exc)}")
         st.query_params.clear()
+
+owner = owner_gate()
+st.title("🛠️ NextGen Tech Notes")
+st.caption("Content operations · human review required · Blogger drafts only")
+creds = get_credentials(st.session_state)
 creds = get_credentials(st.session_state)
 
 with st.sidebar:

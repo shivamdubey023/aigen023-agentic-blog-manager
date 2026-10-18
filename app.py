@@ -143,7 +143,7 @@ def handle_blogger_callback():
                 "redirect_uris": [BLOGGER_REDIRECT_URI],
             }
         },
-        scopes=[BLOGGER_SCOPE],
+        scopes=SCOPES,
         state=oauth_state,
         redirect_uri=BLOGGER_REDIRECT_URI,
     )

@@ -117,12 +117,16 @@ def connect_blogger():
 
 
 def handle_blogger_callback():
+    # Do not consume the OIDC callback used by st.login(). This handler is
+    # only for a Blogger authorization flow started from this session.
+    oauth_state = st.session_state.get("blogger_oauth_state")
+    if not oauth_state:
+        return
     code = st.query_params.get("code")
     state = st.query_params.get("state")
     if not code:
         return
-    oauth_state = st.session_state.get("blogger_oauth_state")
-    if not oauth_state or not state or state != oauth_state:
+    if not state or state != oauth_state:
         st.error("OAuth state did not match. For safety, restart the Blogger connection.")
         st.query_params.clear()
         return

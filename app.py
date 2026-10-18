@@ -23,46 +23,65 @@ def secrets_section(name: str) -> dict:
     except Exception: return {}
 
 def owner_gate() -> str:
-    auth, app_cfg = secrets_section("auth"), secrets_section("app")
-    required = ["redirect_uri","cookie_secret","client_id","client_secret","server_metadata_url"]
-    missing = [f"auth.{x}" for x in required if not auth.get(x)]
-    if not app_cfg.get("allowed_email"): missing.append("app.allowed_email")
-    if missing:
+    """Authenticate the owner using the same Google OAuth flow as the API connection."""
+    app_cfg = secrets_section("app")
+    google = secrets_section("google")
+    allowed_email = str(app_cfg.get("allowed_email", "")).strip().lower()
+    if not allowed_email:
         st.title("NextGen Tech Notes · Content Ops")
-        st.error("Owner sign-in is not configured. Add the required values in Streamlit Manage app → Settings → Secrets.")
-        st.write("Missing keys (values are never displayed):")
-        st.code("\n".join(missing))
+        st.error("Owner login is not configured. Add app.allowed_email in Streamlit Secrets.")
         st.stop()
-    if not st.user.is_logged_in:
+    if not google.get("client_id") or not google.get("client_secret"):
         st.title("NextGen Tech Notes · Content Ops")
-        st.write("Private dashboard for managing technical article drafts.")
-        st.button("Sign in with Google", on_click=st.login, type="primary")
+        st.error("Google OAuth is not configured. Add google.client_id and google.client_secret in Streamlit Secrets.")
         st.stop()
-    email = str(getattr(st.user,"email","") or "").strip().lower()
-    if email != str(app_cfg.get("allowed_email","")).strip().lower():
-        st.error("This Google account is not authorized for this dashboard.")
-        st.button("Sign out", on_click=st.logout)
+    identity = st.session_state.get("google_user", {})
+    email = str(identity.get("email", "")).strip().lower()
+    if email != allowed_email:
+        st.title("NextGen Tech Notes · Content Ops")
+        st.write("Sign in with the Google account authorized to manage this publication.")
+        if email:
+            st.warning("The currently connected Google account is not the allowed owner.")
+        if st.button("Sign in with Google", type="primary"):
+            try:
+                url = start_oauth(google.get("client_id", ""), google.get("client_secret", ""), st.session_state)
+                st.link_button("Continue to Google authorization", url)
+            except Exception as exc:
+                st.error(f"Could not start Google login: {oauth_error_hint(exc)}")
         st.stop()
     return email
+
+# Process Google OAuth before the owner gate; OAuth redirects may create a fresh Streamlit session.
+if st.query_params.get("code"):
+    google_oauth = secrets_section("google")
+    try:
+        finish_oauth(
+            st.query_params.get("code", ""),
+            st.query_params.get("state", ""),
+            google_oauth.get("client_id", ""),
+            google_oauth.get("client_secret", ""),
+            st.session_state,
+        )
+        st.query_params.clear()
+        st.rerun()
+    except Exception as exc:
+        st.error(f"Google login failed: {oauth_error_hint(exc)}")
+        st.query_params.clear()
 
 owner = owner_gate()
 st.title("🛠️ NextGen Tech Notes")
 st.caption("Content operations · human review required · Blogger drafts only")
 creds = get_credentials(st.session_state)
-# Process the Blogger/Search Console OAuth callback only when a flow was started here.
-if st.query_params.get("code") and st.session_state.get("google_api_oauth_state"):
-    try:
-        finish_oauth(st.query_params.get("code",""),st.query_params.get("state",""),st.session_state)
-        st.query_params.clear()
-        st.rerun()
-    except Exception as exc:
-        st.error(f"Google API authorization failed: {oauth_error_hint(exc)}")
-        st.query_params.clear()
 creds = get_credentials(st.session_state)
 
 with st.sidebar:
     st.success(f"Signed in: {owner}")
-    if st.button("Sign out", key="owner_signout"): st.logout()
+    if st.button("Sign out", key="owner_signout"):
+        st.session_state.pop("google_user", None)
+        st.session_state.pop("google_api_token", None)
+        st.session_state.pop("google_api_oauth_state", None)
+        st.session_state.pop("google_api_oauth_client", None)
+        st.rerun()
     st.divider()
     st.metric("Google API connection", "Connected" if creds else "Not connected")
     st.caption("The Google API token is held in the current browser session, not committed to source control.")
@@ -335,7 +354,7 @@ with tabs[4]:
             try:
                 url=start_oauth(google.get("client_id",""),google.get("client_secret",""),st.session_state)
                 st.link_button("Continue to Google authorization",url)
-            except Exception as exc: st.error(str(exc))
+            except Exception as exc: st.error(oauth_error_hint(exc))
     st.divider()
     st.subheader("Affiliate vault")
     with st.form("affiliate_vault_form"):

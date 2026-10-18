@@ -16,16 +16,9 @@ A lean Streamlit dashboard for the technical publication [NextGen Tech Notes](ht
 
 ## Streamlit Community Cloud setup
 
-Deploy the repository's `refactor/content-ops-hub` branch to test this refactor before switching production. In Streamlit Community Cloud, open **Manage app → Settings → Secrets** and add valid TOML. Never commit secrets or paste them into public issues.
+Deploy the `refactor/content-ops-hub` branch to a separate test app first. In Streamlit Community Cloud, open **Manage app → Settings → Secrets** and add valid TOML. This build uses **one Google OAuth flow** for both owner verification and Blogger/Search Console access; it does not use Streamlit's built-in `st.login()` callback.
 
 ```toml
-[auth]
-redirect_uri = "https://aigen023-blog-manager.streamlit.app/oauth2callback"
-cookie_secret = "REPLACE_WITH_A_LONG_RANDOM_SECRET"
-client_id = "YOUR_GOOGLE_OAUTH_CLIENT_ID"
-client_secret = "YOUR_NEW_ROTATED_CLIENT_SECRET"
-server_metadata_url = "https://accounts.google.com/.well-known/openid-configuration"
-
 [app]
 allowed_email = "YOUR_GOOGLE_ACCOUNT_EMAIL"
 
@@ -33,27 +26,30 @@ allowed_email = "YOUR_GOOGLE_ACCOUNT_EMAIL"
 client_id = "YOUR_GOOGLE_OAUTH_CLIENT_ID"
 client_secret = "YOUR_NEW_ROTATED_CLIENT_SECRET"
 
-# Optional; article generation is disabled without this key.
+# Optional: article generation is disabled without this key.
 [gemini]
 api_key = "YOUR_GEMINI_API_KEY"
 ```
 
-Use a **newly rotated** OAuth client secret; do not reuse a secret previously exposed in chat. The same OAuth web client may be used in both `[auth]` and `[google]`, but the client ID and secret must match exactly. Generate a long random `cookie_secret`. Set `allowed_email` to the Google account allowed to use the private dashboard.
+Use a **newly rotated** OAuth client secret; do not reuse a secret previously exposed in chat. The client ID and secret must match. Set `allowed_email` to the exact Google account permitted to access this dashboard. Never commit secrets to Git.
 
 ## Google OAuth configuration
 
 1. In Google Cloud, enable **Blogger API v3** and **Google Search Console API**.
 2. Configure an OAuth client of type **Web application**.
-3. Add these exact **Authorized redirect URIs**:
-   - `https://aigen023-blog-manager.streamlit.app/oauth2callback` — Streamlit's Google sign-in callback.
-   - `https://aigen023-blog-manager.streamlit.app/` — Blogger/Search Console API authorization callback.
-4. If the OAuth consent screen is in **Testing**, add the owner account under **Audience → Test users**.
-5. Ensure the account has permission to manage the Blogger blog and access the Search Console property `https://aigen023.blogspot.com/`.
-6. Required API OAuth scopes:
-   - `https://www.googleapis.com/auth/blogger`
-   - `https://www.googleapis.com/auth/webmasters.readonly`
+3. Add this exact **Authorized redirect URI**:
+   - `https://aigen023-blog-manager.streamlit.app/`
+4. If you deploy a separate Streamlit test app, add its exact root URL as another Authorized redirect URI, including the trailing slash.
+5. If the OAuth consent screen is in **Testing**, add the owner account under **Audience → Test users**.
+6. Ensure the owner account can manage the Blogger blog and access the Search Console property `https://aigen023.blogspot.com/`.
+7. Required OAuth scopes:
+   - `openid`, `email`, `profile` — verify the signed-in Google account.
+   - `https://www.googleapis.com/auth/blogger` — create Blogger drafts.
+   - `https://www.googleapis.com/auth/webmasters.readonly` — read Search Console reports.
 
-If the Blogger API returns an error, check API enablement, test-user access, matching OAuth credentials, the exact redirect URI, and the account's property permissions. Analytics and AdSense reporting are intentionally not claimed as implemented in this refactor; no estimated earnings are fabricated.
+The callback uses a short-lived, one-time OAuth state persisted in SQLite so the state check can survive a full browser redirect. If login still fails, open the Streamlit app logs and inspect the full traceback without sharing client secrets or authorization codes. For `invalid_client`, verify the matching client ID/rotated secret. For `redirect_uri_mismatch`, make the Google Cloud redirect URI match exactly. For `access_denied`, check test-user access and consent-screen settings.
+
+Analytics and AdSense reporting are not claimed as implemented in this refactor; no estimated earnings are fabricated.
 
 ## Run locally (Windows PowerShell)
 

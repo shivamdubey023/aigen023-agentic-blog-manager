@@ -95,11 +95,11 @@ with tabs[0]:
         if st.button("Process next item (prepare for review)"):
             article = db.get_article(selected["article_id"]) if selected.get("article_id") else None
             if not article:
-                db.log_queue_event(selected["id"],"Skipped: article record missing",retry=True)
+                db.log_queue_event(selected["id"],"Skipped: article record missing",retry=True,state="PAUSED")
                 st.warning("Queue item has no linked article.")
             else:
                 db.set_article_status(article["id"],"DRAFT")
-                db.log_queue_event(selected["id"],"Prepared draft for human review")
+                db.log_queue_event(selected["id"],"Prepared draft for human review",state="PAUSED")
                 st.success("Article returned to DRAFT for review. No automatic publishing was performed.")
             st.rerun()
     else: st.info("Queue is empty. Save an article from the editor and choose Add to queue.")

@@ -15,7 +15,10 @@ const state = {
     schema: {},
     featuredImageUrl: '',
     diagramImageUrl: '',
+    bloggerPostId: '',
+    bloggerBlogId: '',
   },
+  selectedStockImage: null,
   trendingPick: null,
   googleConnected: false,
   activeBlogId: '',
@@ -46,13 +49,16 @@ const el = {
   btnShuffleTopic: document.getElementById('btn-shuffle-topic'),
   autopilotProvider: document.getElementById('autopilot-provider'),
   autopilotCustomTopic: document.getElementById('autopilot-custom-topic'),
+  autopilotCustomKeyword: document.getElementById('autopilot-custom-keyword'),
+  btnUseTopic: document.getElementById('btn-use-topic'),
   autopilotMonetizeType: document.getElementById('autopilot-monetize-type'),
   autopilotProductSelectGroup: document.getElementById('autopilot-product-select-group'),
   autopilotProductSelect: document.getElementById('autopilot-product-select'),
   autopilotAffiliateSelectGroup: document.getElementById('autopilot-affiliate-select-group'),
   autopilotAffiliateSelect: document.getElementById('autopilot-affiliate-select'),
-  autopilotToggleBlogger: document.getElementById('autopilot-toggle-blogger'),
   btnRunAutopilot: document.getElementById('btn-run-autopilot'),
+  autopilotModel: document.getElementById('autopilot-model'),
+  providerStatus: document.getElementById('provider-status'),
   autopilotSpinner: document.getElementById('autopilot-spinner'),
   autopilotResultCard: document.getElementById('autopilot-result-card'),
   autopilotResultBody: document.getElementById('autopilot-result-body'),
@@ -63,6 +69,8 @@ const el = {
   btnFetchBloggerPosts: document.getElementById('btn-fetch-blogger-posts'),
   rewriteTitle: document.getElementById('rewrite-title'),
   rewriteContent: document.getElementById('rewrite-content'),
+  rewriteProvider: document.getElementById('rewrite-provider'),
+  rewriteModel: document.getElementById('rewrite-model'),
   rewriteSpinner: document.getElementById('rewrite-spinner'),
   btnRunRewrite: document.getElementById('btn-run-rewrite'),
   rewriteResultBox: document.getElementById('rewrite-result-box'),
@@ -84,10 +92,11 @@ const el = {
   btnSendToEditor: document.getElementById('btn-send-to-editor'),
 
   // Image Studio
-  imgTopicInput: document.getElementById('img-topic-input'),
-  btnAutoPrompt: document.getElementById('btn-auto-prompt'),
-  imgPromptInput: document.getElementById('img-prompt-input'),
-  btnGenerateImage: document.getElementById('btn-generate-image'),
+  imageSearchProvider: document.getElementById('image-search-provider'),
+  imageSearchQuery: document.getElementById('image-search-query'),
+  imageProviderStatus: document.getElementById('image-provider-status'),
+  stockImageResults: document.getElementById('stock-image-results'),
+  btnSearchStock: document.getElementById('btn-search-stock'),
   imgSpinner: document.getElementById('img-spinner'),
   imgDisplayContainer: document.getElementById('image-display-container'),
   imgActions: document.getElementById('image-actions'),
@@ -102,6 +111,7 @@ const el = {
   btnRefreshPreview: document.getElementById('btn-refresh-preview'),
   btnSaveDb: document.getElementById('btn-save-db'),
   btnUploadBlogger: document.getElementById('btn-upload-blogger'),
+  btnDeleteLocal: document.getElementById('btn-delete-local-copy'),
   previewRendered: document.getElementById('preview-content-rendered'),
   previewHtml: document.getElementById('preview-content-html'),
   previewSchema: document.getElementById('preview-content-schema'),
@@ -120,6 +130,7 @@ const el = {
   // Blogger & OAuth
   activeBlogSelector: document.getElementById('active-blog-selector'),
   btnRefreshBlogs: document.getElementById('btn-refresh-blogs'),
+  btnSyncNavigation: document.getElementById('btn-sync-navigation'),
   bloggerPostsContainer: document.getElementById('blogger-posts-container'),
 };
 
@@ -127,12 +138,22 @@ function showToast(message, type = 'info') {
   if (!el.toastContainer) return;
   const toast = document.createElement('div');
   toast.className = `toast ${type}`;
-  toast.innerHTML = `<span>${type === 'success' ? '✓' : type === 'error' ? '⚠' : 'ℹ'}</span> <span>${message}</span>`;
+  toast.innerHTML = `<span>${type === 'success' ? '✓' : type === 'error' ? '⚠' : 'ℹ'}</span> <span>${escapeHtml(message)}</span>`;
   el.toastContainer.appendChild(toast);
   setTimeout(() => {
     toast.style.opacity = '0';
     setTimeout(() => toast.remove(), 300);
   }, 4500);
+}
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, (char) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  })[char]);
 }
 
 // Persistent Auth Headers for Serverless Invocations
@@ -153,17 +174,57 @@ const PROVIDER_MODELS = {
   anthropic: ['claude-3-5-sonnet-20241022', 'claude-3-5-haiku-20241022'],
 };
 
-if (el.genProvider) {
-  el.genProvider.addEventListener('change', (e) => {
-    const models = PROVIDER_MODELS[e.target.value] || [];
-    el.genModel.innerHTML = '';
-    models.forEach(m => {
-      const opt = document.createElement('option');
-      opt.value = m;
-      opt.textContent = m;
-      el.genModel.appendChild(opt);
-    });
+function setModelOptions(provider, select) {
+  if (!select) return;
+  select.innerHTML = '';
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = provider ? 'Choose a model' : 'Choose a provider first';
+  placeholder.disabled = true;
+  placeholder.selected = true;
+  select.appendChild(placeholder);
+  (PROVIDER_MODELS[provider] || []).forEach((model) => {
+    const option = document.createElement('option');
+    option.value = model;
+    option.textContent = model;
+    select.appendChild(option);
   });
+}
+
+if (el.genProvider) {
+  el.genProvider.addEventListener('change', () => setModelOptions(el.genProvider.value, el.genModel));
+}
+if (el.rewriteProvider) {
+  el.rewriteProvider.addEventListener('change', () => setModelOptions(el.rewriteProvider.value, el.rewriteModel));
+}
+if (el.autopilotProvider) {
+  el.autopilotProvider.addEventListener('change', () => setModelOptions(el.autopilotProvider.value, el.autopilotModel));
+}
+
+async function loadProviderStatus() {
+  if (!el.providerStatus) return;
+  try {
+    const response = await fetch('/api/providers');
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || 'Could not load provider configuration.');
+    const configured = data.configured || {};
+    [el.autopilotProvider, el.genProvider, el.rewriteProvider].filter(Boolean).forEach((select) => {
+      Array.from(select.options).forEach((option) => {
+        if (!option.value) return;
+        const label = option.dataset.label || option.textContent;
+        option.dataset.label = label;
+        const available = configured[option.value] === true;
+        option.disabled = !available;
+        option.textContent = `${label} — ${available ? 'configured' : 'not configured'}`;
+      });
+    });
+    const ready = Object.entries(configured).filter(([, available]) => available).map(([name]) => name);
+    el.providerStatus.textContent = ready.length
+      ? `Configured providers: ${ready.join(', ')}. Keys remain server-side.`
+      : 'No AI provider is configured on the server. Add a provider key in Vercel environment variables; manual editing remains available.';
+  } catch (error) {
+    el.providerStatus.textContent = 'Provider configuration could not be checked. The server will report a clear error if generation is attempted.';
+  }
 }
 
 // Tab Navigation
@@ -196,23 +257,11 @@ if (el.autopilotMonetizeType) {
 }
 
 // Trending Topics & Autopilot
-async function loadTrendingTopics() {
-  try {
-    const res = await fetch('/api/trending');
-    const data = await res.json();
-    if (data.random_suggestion) {
-      applyTrendingPick(data.random_suggestion);
-    }
-  } catch (err) {
-    console.error('Failed to load trending topics', err);
-  }
-}
-
 function applyTrendingPick(pick) {
   state.trendingPick = pick;
   if (el.currentTrendingTitle) el.currentTrendingTitle.textContent = pick.topic;
   if (el.trendingCategory) el.trendingCategory.textContent = pick.category || 'Tech';
-  if (el.trendingCpc) el.trendingCpc.textContent = `${pick.cpc_tier || 'High'} AdSense CPC`;
+  if (el.trendingCpc) el.trendingCpc.textContent = 'Curated idea · no search metrics verified';
 }
 
 if (el.btnShuffleTopic) {
@@ -222,7 +271,7 @@ if (el.btnShuffleTopic) {
       const data = await res.json();
       if (data.random_suggestion) {
         applyTrendingPick(data.random_suggestion);
-        showToast('New trending topic selected!', 'info');
+        showToast('Idea suggested. Choose “Use this idea” before generating.', 'info');
       }
     } catch (err) {
       showToast(err.message, 'error');
@@ -230,30 +279,50 @@ if (el.btnShuffleTopic) {
   });
 }
 
-// 1-Click Autopilot Generator
+if (el.btnUseTopic) {
+  el.btnUseTopic.addEventListener('click', () => {
+    if (!state.trendingPick) {
+      showToast('Request a topic idea first, then choose it here.', 'info');
+      return;
+    }
+    el.autopilotCustomTopic.value = state.trendingPick.topic;
+    el.autopilotCustomKeyword.value = state.trendingPick.keyword || '';
+    el.autopilotCustomTopic.focus();
+  });
+}
+
+// User-directed article generation
 if (el.btnRunAutopilot) {
   el.btnRunAutopilot.addEventListener('click', async () => {
-    const customTopic = el.autopilotCustomTopic.value.trim();
-    const topic = customTopic || (state.trendingPick ? state.trendingPick.topic : '');
-    const keyword = state.trendingPick ? state.trendingPick.keyword : topic;
+    const topic = el.autopilotCustomTopic.value.trim();
+    const keyword = el.autopilotCustomKeyword.value.trim() || topic;
     const provider = el.autopilotProvider.value;
+    if (topic.length < 2) {
+      showToast('Enter a topic or explicitly choose a suggested idea before generating.', 'error');
+      el.autopilotCustomTopic.focus();
+      return;
+    }
+    if (!provider) {
+      showToast('Choose an AI provider before generating.', 'error');
+      el.autopilotProvider.focus();
+      return;
+    }
+    const model = el.autopilotModel.value;
+    if (!model) {
+      showToast('Choose a model for the selected provider.', 'error');
+      el.autopilotModel.focus();
+      return;
+    }
     const monetizeType = el.autopilotMonetizeType ? el.autopilotMonetizeType.value : 'none';
     const includeProduct = monetizeType === 'product';
     const productId = includeProduct && el.autopilotProductSelect.value ? parseInt(el.autopilotProductSelect.value, 10) : null;
     const includeAffiliate = monetizeType === 'affiliate';
     const affiliateId = includeAffiliate && el.autopilotAffiliateSelect.value ? parseInt(el.autopilotAffiliateSelect.value, 10) : null;
-    const uploadBlogger = el.autopilotToggleBlogger.checked;
-    const blogId = el.activeBlogSelector ? el.activeBlogSelector.value : '';
-
-    if (uploadBlogger && !state.googleConnected) {
-      showToast('Google Blogger not connected. Article will be generated and saved in local draft storage.', 'info');
-    }
-
     el.autopilotSpinner.classList.remove('hidden');
     el.btnRunAutopilot.disabled = true;
 
     try {
-      showToast('⚡ Researching topic & generating 1,500+ word humanized guide...', 'info');
+      showToast('Generating a draft for your selected topic...', 'info');
       const res = await fetch('/api/autopilot', {
         method: 'POST',
         headers: getAuthHeaders(),
@@ -261,12 +330,11 @@ if (el.btnRunAutopilot) {
           topic,
           primary_keyword: keyword,
           provider,
+          model,
           include_product: includeProduct,
           product_id: productId,
           include_affiliate: includeAffiliate,
           affiliate_id: affiliateId,
-          upload_to_blogger: uploadBlogger && state.googleConnected && Boolean(blogId),
-          blog_id: blogId,
         }),
       });
       const data = await res.json();
@@ -278,32 +346,25 @@ if (el.btnRunAutopilot) {
       state.currentArticle.keyword = data.keyword;
       state.currentArticle.markdown = data.markdown;
       state.currentArticle.renderedHtml = data.rendered_html;
-      state.currentArticle.featuredImageUrl = data.image_url;
-      state.currentArticle.diagramImageUrl = data.diagram_url;
+      state.currentArticle.featuredImageUrl = '';
+      state.currentArticle.diagramImageUrl = '';
+      state.currentArticle.bloggerPostId = '';
+      state.currentArticle.bloggerBlogId = '';
 
       el.autopilotResultBody.innerHTML = `
         <div style="display:flex; flex-direction:column; gap:14px;">
-          <div style="display:grid; grid-template-columns: 1fr 1fr; gap:12px;">
-            <div>
-              <span style="font-size:12px; color:#94a3b8; display:block; margin-bottom:4px;">Cover Banner</span>
-              <img src="${data.image_url}" alt="Cover" style="width:100%; max-height:160px; object-fit:cover; border-radius:8px;" />
-            </div>
-            <div>
-              <span style="font-size:12px; color:#94a3b8; display:block; margin-bottom:4px;">Architecture Diagram</span>
-              <img src="${data.diagram_url}" alt="Diagram" style="width:100%; max-height:160px; object-fit:cover; border-radius:8px;" />
-            </div>
-          </div>
-          <h3 style="color:#ffffff; margin:4px 0 0 0; font-size:18px;">${data.title}</h3>
+          <h3 style="color:#ffffff; margin:4px 0 0 0; font-size:18px;">${escapeHtml(data.title)}</h3>
           <div style="display:flex; gap:10px; flex-wrap:wrap;">
-            <span class="badge green">✓ ${data.word_count} Humanized Words</span>
+            <span class="badge green">${data.word_count} words</span>
             <span class="badge blue">Draft #${data.article_id} Saved</span>
-            ${includeProduct ? `<span class="badge purple">Product Attached</span>` : `<span class="badge yellow">AdSense Pure Mode</span>`}
-            ${data.blogger_result ? `<span class="badge green">✓ Uploaded to Blogger Drafts!</span>` : ''}
+            ${includeProduct ? `<span class="badge purple">Product attached</span>` : ''}
           </div>
+          <p class="section-desc">Review and edit the saved draft before creating a Blogger draft. Add an image only if useful.</p>
         </div>
       `;
       el.autopilotResultCard.classList.remove('hidden');
-      showToast('1,500+ word masterclass with dual illustrations ready!', 'success');
+      showToast('Selected-topic draft generated and saved locally for review.', 'success');
+      updateLocalDeleteButton();
     } catch (err) {
       showToast(err.message, 'error');
     } finally {
@@ -325,8 +386,15 @@ if (el.btnRunRewrite) {
   el.btnRunRewrite.addEventListener('click', async () => {
     const title = el.rewriteTitle.value.trim();
     const content = el.rewriteContent.value.trim();
+    const provider = el.rewriteProvider.value;
+    const model = el.rewriteModel.value;
+
     if (!title || !content) {
       showToast('Please provide both title and original content.', 'error');
+      return;
+    }
+    if (!provider || !model) {
+      showToast('Choose a configured AI provider and model before rewriting.', 'error');
       return;
     }
 
@@ -334,12 +402,13 @@ if (el.btnRunRewrite) {
     el.btnRunRewrite.disabled = true;
 
     try {
-      showToast('Transforming thin content into 1,500+ word humanized guide...', 'info');
+      showToast('Generating editorial suggestions for the selected content...', 'info');
       const res = await fetch('/api/rewrite', {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify({
-          provider: 'groq',
+          provider,
+          model,
           original_title: title,
           original_content: content,
         }),
@@ -347,20 +416,32 @@ if (el.btnRunRewrite) {
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || 'Rewrite failed');
 
-      state.currentArticle.title = data.title;
-      state.currentArticle.markdown = data.markdown;
+      state.currentArticle = {
+        id: null,
+        title: data.title,
+        topic: title,
+        keyword: title,
+        markdown: data.markdown,
+        renderedHtml: '',
+        schema: {},
+        featuredImageUrl: '',
+        diagramImageUrl: '',
+        bloggerPostId: '',
+        bloggerBlogId: '',
+      };
+      updateLocalDeleteButton();
 
       el.rewriteResultBox.innerHTML = `
         <div>
           <h3 style="color:#34d399; margin-top:0;">Expansion Complete!</h3>
-          <p style="font-size:14px; color:#cbd5e1;">Generated <strong>${data.word_count} words</strong> with complete production code, troubleshooting tracebacks, and structured FAQs.</p>
+          <p style="font-size:14px; color:#cbd5e1;">Generated <strong>${data.word_count} words</strong>. Review code examples, references, and factual claims before use.</p>
           <div style="background:#0f172a; padding:12px; border-radius:8px; max-height:220px; overflow-y:auto; font-family:monospace; font-size:12px; color:#94a3b8; white-space:pre-wrap;">
-            ${data.markdown.slice(0, 1000)}...
+            ${escapeHtml(data.markdown.slice(0, 1000))}...
           </div>
         </div>
       `;
       el.rewriteActions.classList.remove('hidden');
-      showToast('Post expanded to AdSense masterclass level!', 'success');
+      showToast('Editorial draft generated. Review it before saving or publishing.', 'success');
     } catch (err) {
       showToast(err.message, 'error');
     } finally {
@@ -388,11 +469,22 @@ if (el.genForm) {
     const audience = el.genAudience.value;
     const notes = el.genNotes.value.trim();
 
+    if (!topic) {
+      showToast('Enter a topic before generating.', 'error');
+      el.genTopic.focus();
+      return;
+    }
+    if (!provider) {
+      showToast('Choose an AI provider before generating.', 'error');
+      el.genProvider.focus();
+      return;
+    }
+
     el.genSpinner.classList.remove('hidden');
     el.genBtn.disabled = true;
 
     try {
-      showToast('Generating technical tutorial with verified real code...', 'info');
+      showToast('Generating a draft for your selected topic...', 'info');
       const res = await fetch('/api/generate', {
         method: 'POST',
         headers: getAuthHeaders(),
@@ -401,13 +493,25 @@ if (el.genForm) {
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || 'Generation failed');
 
-      state.currentArticle.title = data.title;
-      state.currentArticle.markdown = data.markdown;
+      state.currentArticle = {
+        id: null,
+        title: data.title,
+        topic,
+        keyword: keyword || topic,
+        markdown: data.markdown,
+        renderedHtml: '',
+        schema: {},
+        featuredImageUrl: '',
+        diagramImageUrl: '',
+        bloggerPostId: '',
+        bloggerBlogId: '',
+      };
+      updateLocalDeleteButton();
 
       el.genSummaryBox.innerHTML = `
         <div>
-          <h3 style="color:#38bdf8; margin-top:0;">${data.title}</h3>
-          <p style="font-size:14px; color:#cbd5e1;">Generated <strong>${data.word_count} words</strong>. Verified syntax-valid code & traceback troubleshooting included.</p>
+          <h3 style="color:#38bdf8; margin-top:0;">${escapeHtml(data.title)}</h3>
+          <p style="font-size:14px; color:#cbd5e1;">Generated <strong>${data.word_count} words</strong>. Review the code, references, and factual claims before use.</p>
         </div>
       `;
       el.genActions.classList.remove('hidden');
@@ -430,9 +534,26 @@ if (el.btnSendToEditor) {
 
 // Editor & Live Rendering
 function loadArticleIntoEditor(article) {
+  state.currentArticle = {
+    ...state.currentArticle,
+    id: article.id ?? state.currentArticle.id,
+    title: article.title || '',
+    topic: article.topic || state.currentArticle.topic,
+    keyword: article.keyword || article.primary_keyword || state.currentArticle.keyword,
+    markdown: article.markdown || article.markdown_body || '',
+    bloggerPostId: article.bloggerPostId || article.blogger_post_id || '',
+    bloggerBlogId: article.bloggerBlogId || article.blogger_blog_id || '',
+  };
   el.editorTitle.value = article.title || '';
-  el.markdownEditor.value = article.markdown || '';
+  el.markdownEditor.value = state.currentArticle.markdown;
+  updateLocalDeleteButton();
   renderPreview();
+}
+
+function updateLocalDeleteButton() {
+  if (!el.btnDeleteLocal) return;
+  const canDelete = Boolean(state.currentArticle.id && state.currentArticle.bloggerPostId);
+  el.btnDeleteLocal.classList.toggle('hidden', !canDelete);
 }
 
 async function renderPreview() {
@@ -441,7 +562,7 @@ async function renderPreview() {
   if (!markdown) {
     el.previewRendered.innerHTML = '<p class="text-muted">Type markdown on the left to see live rendered HTML.</p>';
     el.wordCountBadge.textContent = '0 words';
-    return;
+    return false;
   }
 
   const words = markdown.split(/\s+/).filter(Boolean).length;
@@ -471,13 +592,15 @@ async function renderPreview() {
     el.rawSchemaViewer.textContent = JSON.stringify(data.schema, null, 2);
 
     if (data.warnings && data.warnings.length > 0) {
-      el.qualityWarningsBanner.innerHTML = `<strong>AdSense Quality Checklist:</strong><ul>${data.warnings.map(w => `<li>${w}</li>`).join('')}</ul>`;
+      el.qualityWarningsBanner.innerHTML = `<strong>Article review warnings:</strong><ul>${data.warnings.map(w => `<li>${escapeHtml(w)}</li>`).join('')}</ul>`;
       el.qualityWarningsBanner.classList.remove('hidden');
     } else {
       el.qualityWarningsBanner.classList.add('hidden');
     }
+    return true;
   } catch (err) {
     console.error('Render preview error', err);
+    return false;
   }
 }
 
@@ -486,33 +609,39 @@ if (el.markdownEditor) el.markdownEditor.addEventListener('input', debounce(rend
 if (el.toggleToc) el.toggleToc.addEventListener('change', renderPreview);
 if (el.toggleEbook) el.toggleEbook.addEventListener('change', renderPreview);
 
+async function saveCurrentArticle() {
+  const title = el.editorTitle.value.trim();
+  const markdown = el.markdownEditor.value.trim();
+  if (!title || !markdown) throw new Error('Title and content are required to save the draft.');
+  if (!await renderPreview()) throw new Error('Could not render the current article; it was not saved.');
+  const response = await fetch('/api/articles', {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({
+      topic: state.currentArticle.topic || title,
+      primary_keyword: state.currentArticle.keyword || title,
+      title,
+      markdown_body: markdown,
+      rendered_html: state.currentArticle.renderedHtml,
+      schema_json: state.currentArticle.schema,
+      article_id: state.currentArticle.id,
+    }),
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.detail || 'Save failed.');
+  state.currentArticle.id = data.id;
+  state.currentArticle.title = title;
+  state.currentArticle.markdown = markdown;
+  updateLocalDeleteButton();
+  return data.id;
+}
+
 // Save Draft to Local DB
 if (el.btnSaveDb) {
   el.btnSaveDb.addEventListener('click', async () => {
-    const title = el.editorTitle.value.trim();
-    const markdown = el.markdownEditor.value.trim();
-    if (!title || !markdown) {
-      showToast('Title and content are required to save draft.', 'error');
-      return;
-    }
     try {
-      const res = await fetch('/api/articles', {
-        method: 'POST',
-        headers: getAuthHeaders(),
-        body: JSON.stringify({
-          topic: state.currentArticle.topic || title,
-          primary_keyword: state.currentArticle.keyword || title,
-          title,
-          markdown_body: markdown,
-          rendered_html: state.currentArticle.renderedHtml,
-          schema_json: state.currentArticle.schema,
-          article_id: state.currentArticle.id,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || 'Save failed');
-      state.currentArticle.id = data.id;
-      showToast(`Draft #${data.id} saved in database!`, 'success');
+      const articleId = await saveCurrentArticle();
+      showToast(`Draft #${articleId} saved in database!`, 'success');
     } catch (err) {
       showToast(err.message, 'error');
     }
@@ -534,27 +663,33 @@ if (el.btnUploadBlogger) {
       return;
     }
     const title = el.editorTitle.value.trim();
-    const html = state.currentArticle.renderedHtml || el.rawHtmlViewer.value;
-    if (!title || !html) {
-      showToast('Title and rendered HTML are required to create Blogger draft.', 'error');
+    if (!title) {
+      showToast('Enter an article title before creating a Blogger draft.', 'error');
       return;
     }
+    if (!window.confirm(`Create a Blogger draft for "${title}" in the selected blog? This will not publish it.`)) return;
 
     try {
-      showToast('Publishing draft to Blogger...', 'info');
+      const articleId = await saveCurrentArticle();
+      const currentHtml = state.currentArticle.renderedHtml;
+      showToast('Creating the confirmed Blogger draft...', 'info');
       const res = await fetch('/api/blogger/draft', {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify({
           blog_id: blogId,
           title,
-          rendered_html: html,
-          article_id: state.currentArticle.id,
+          rendered_html: currentHtml,
+          article_id: articleId,
+          confirmed: true,
         }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || 'Blogger upload failed');
-      showToast('Successfully published draft to Blogger!', 'success');
+      state.currentArticle.bloggerPostId = data.post_id;
+      state.currentArticle.bloggerBlogId = blogId;
+      updateLocalDeleteButton();
+      showToast('Blogger draft created; it has not been published.', 'success');
       loadBloggerPosts(blogId);
     } catch (err) {
       showToast(err.message, 'error');
@@ -562,53 +697,190 @@ if (el.btnUploadBlogger) {
   });
 }
 
-// Free Image Studio
-if (el.btnAutoPrompt) {
-  el.btnAutoPrompt.addEventListener('click', () => {
-    const topic = el.imgTopicInput.value.trim();
-    if (!topic) {
-      showToast('Enter a topic first.', 'error');
+if (el.btnDeleteLocal) {
+  el.btnDeleteLocal.addEventListener('click', async () => {
+    const articleId = state.currentArticle.id;
+    if (!articleId || !state.currentArticle.bloggerPostId) {
+      showToast('Only a locally saved article linked to a confirmed Blogger draft can be removed.', 'error');
       return;
     }
-    el.imgPromptInput.value = `Modern minimalist 3D isometric tech banner about ${topic}, sleek dark theme, vibrant neon accents, futuristic glassmorphism, 8k render, no text, no logo`;
+    const confirmed = window.confirm('Delete this article from local storage? Its Blogger draft will remain unchanged.');
+    if (!confirmed) return;
+    try {
+      const response = await fetch(`/api/articles/${articleId}?confirmed=true`, {
+        method: 'DELETE',
+        headers: getAuthHeaders(),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || 'Could not delete local article.');
+      state.currentArticle.id = null;
+      state.currentArticle.bloggerPostId = '';
+      state.currentArticle.bloggerBlogId = '';
+      updateLocalDeleteButton();
+      showToast('Local copy deleted. The Blogger draft was not changed.', 'success');
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
   });
 }
 
-if (el.btnGenerateImage) {
-  el.btnGenerateImage.addEventListener('click', async () => {
-    const prompt = el.imgPromptInput.value.trim();
-    const topic = el.imgTopicInput.value.trim();
-    el.imgSpinner.classList.remove('hidden');
-    el.btnGenerateImage.disabled = true;
+async function loadImageProviderStatus() {
+  if (!el.imageProviderStatus || !el.imageSearchProvider) return;
+  try {
+    const response = await fetch('/api/images/providers');
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || 'Could not check image provider configuration.');
+    const configured = data.configured || {};
+    for (const option of el.imageSearchProvider.options) {
+      if (!option.value) continue;
+      const ready = Boolean(configured[option.value]);
+      option.disabled = !ready;
+      option.textContent = `${option.value === 'pexels' ? 'Pexels' : 'Unsplash'}${ready ? '' : ' (not configured)'}`;
+    }
+    const names = Object.keys(configured).filter((name) => configured[name]);
+    el.imageProviderStatus.textContent = names.length
+      ? `Configured: ${names.map((name) => name[0].toUpperCase() + name.slice(1)).join(', ')}. Keys remain server-side.`
+      : 'No stock image API keys are configured. Add PEXELS_API_KEY or UNSPLASH_ACCESS_KEY in Vercel settings, or keep the article image-free.';
+  } catch (err) {
+    el.imageProviderStatus.textContent = `Image provider status unavailable: ${err.message}`;
+  }
+}
 
+function renderStockImageResults(images) {
+  el.stockImageResults.replaceChildren();
+  el.imgDisplayContainer.replaceChildren();
+  el.imgDisplayContainer.classList.add('hidden');
+  state.selectedStockImage = null;
+  el.imgActions.classList.add('hidden');
+  if (!images.length) {
+    el.stockImageResults.textContent = 'No photos found for this search. Try a broader phrase.';
+    el.stockImageResults.className = 'image-display-empty';
+    return;
+  }
+  el.stockImageResults.className = 'stock-image-grid';
+  images.forEach((image) => {
+    const card = document.createElement('article');
+    card.className = 'stock-image-card';
+    const preview = document.createElement('img');
+    preview.src = image.thumbnail_url;
+    preview.alt = image.alt_text || 'Stock photo result';
+    preview.loading = 'lazy';
+    preview.referrerPolicy = 'no-referrer';
+    const attribution = document.createElement('p');
+    attribution.textContent = `Photo by ${image.photographer} · ${image.provider}`;
+    const select = document.createElement('button');
+    select.type = 'button';
+    select.className = 'btn btn-secondary btn-sm';
+    select.textContent = 'Select this photo';
+    select.addEventListener('click', () => {
+      state.selectedStockImage = image;
+      el.imgDisplayContainer.replaceChildren();
+      const selected = document.createElement('img');
+      selected.src = image.image_url;
+      selected.alt = image.alt_text || 'Selected stock photo';
+      selected.loading = 'lazy';
+      selected.referrerPolicy = 'no-referrer';
+      selected.style.cssText = 'width:100%; border-radius:10px;';
+      el.imgDisplayContainer.appendChild(selected);
+      el.imgDisplayContainer.classList.remove('hidden');
+      el.imgActions.classList.remove('hidden');
+    });
+    card.append(preview, attribution, select);
+    el.stockImageResults.appendChild(card);
+  });
+}
+
+if (el.btnSearchStock) {
+  loadImageProviderStatus();
+  el.btnSearchStock.addEventListener('click', async () => {
+    const provider = el.imageSearchProvider.value;
+    const query = el.imageSearchQuery.value.trim();
+    if (!provider || query.length < 2) {
+      showToast('Choose a configured source and enter a search phrase.', 'error');
+      return;
+    }
+    el.imgSpinner.classList.remove('hidden');
+    el.btnSearchStock.disabled = true;
     try {
-      showToast('Generating permanent free AI cover image...', 'info');
-      const res = await fetch('/api/generate-image', {
+      const response = await fetch('/api/images/search', {
         method: 'POST',
         headers: getAuthHeaders(),
-        body: JSON.stringify({ prompt, topic }),
+        body: JSON.stringify({ provider, query }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || 'Image generation failed');
-
-      el.imgDisplayContainer.innerHTML = `<img src="${data.image_url}" alt="Cover" style="width:100%; border-radius:10px; box-shadow:0 10px 25px rgba(0,0,0,0.5);" />`;
-      el.imgActions.classList.remove('hidden');
-      state.currentArticle.featuredImageUrl = data.image_url;
-      showToast('High-resolution cover generated!', 'success');
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || 'Stock image search failed.');
+      renderStockImageResults(data.images || []);
     } catch (err) {
       showToast(err.message, 'error');
     } finally {
       el.imgSpinner.classList.add('hidden');
-      el.btnGenerateImage.disabled = false;
+      el.btnSearchStock.disabled = false;
     }
   });
 }
 
 if (el.btnInsertImageEditor) {
-  el.btnInsertImageEditor.addEventListener('click', () => {
-    renderPreview();
+  el.btnInsertImageEditor.addEventListener('click', async () => {
+    const image = state.selectedStockImage;
+    if (!image) {
+      showToast('Select a stock photo before inserting it.', 'error');
+      return;
+    }
+    if (!el.editorTitle.value.trim()) {
+      showToast('Open or start an article in the editor before inserting a photo.', 'error');
+      switchTab('tab-editor');
+      return;
+    }
+    const safeMarkdown = (text) => String(text).replace(/([\\[\]])/g, '\\$1');
+    const provider = image.provider === 'pexels' ? 'Pexels' : 'Unsplash';
+    const snippet = `![${safeMarkdown(image.alt_text || 'Article illustration')}](<${image.image_url}>)\n\nPhoto by [${safeMarkdown(image.photographer)}](<${image.photographer_url}>) on [${provider}](<${image.source_url}>).\n\n`;
+    const editor = el.markdownEditor;
+    const start = editor.selectionStart;
+    const end = editor.selectionEnd;
+    editor.setRangeText(snippet, start, end, 'end');
+    editor.focus();
+    state.currentArticle.markdown = editor.value;
+    await renderPreview();
     switchTab('tab-editor');
-    showToast('Cover attached to current article!', 'success');
+    showToast(`${provider} photo inserted with source attribution. Save the edited draft to keep the change.`, 'success');
+  });
+}
+
+if (el.btnSyncNavigation) {
+  el.btnSyncNavigation.addEventListener('click', async () => {
+    const blogId = el.activeBlogSelector ? el.activeBlogSelector.value : '';
+    if (!state.googleConnected) {
+      showToast('Connect your Google account before syncing live post navigation.', 'error');
+      return;
+    }
+    if (!blogId) {
+      showToast('Select a Blogger blog first.', 'error');
+      return;
+    }
+    const confirmed = window.confirm(
+      'This will update the HTML of LIVE posts in chronological order to add previous/next links. Draft posts are not edited. Continue?'
+    );
+    if (!confirmed) return;
+    el.btnSyncNavigation.disabled = true;
+    try {
+      const response = await fetch('/api/blogger/navigation/sync', {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ blog_id: blogId, confirmed: true }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || 'Could not synchronize navigation.');
+      const skipped = (data.skipped_missing_published_date || []).length;
+      const failures = (data.errors || []).length;
+      const summary = `Navigation sync: ${data.updated} updated, ${data.unchanged} unchanged, ${skipped} missing dates, ${failures} failed.`;
+      showToast(summary, failures ? 'error' : 'success');
+      if (failures) console.error('Blogger navigation sync errors', data.errors);
+      await loadBloggerPosts(blogId);
+    } catch (err) {
+      showToast(err.message, 'error');
+    } finally {
+      el.btnSyncNavigation.disabled = false;
+    }
   });
 }
 
@@ -985,7 +1257,7 @@ function debounce(func, wait) {
 
 // Startup Initialization
 window.addEventListener('DOMContentLoaded', () => {
-  loadTrendingTopics();
+  loadProviderStatus();
   checkOAuthStatus();
   loadProducts();
   loadAffiliates();

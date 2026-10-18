@@ -1,82 +1,69 @@
-# NextGen Tech Notes — AI Agentic Blog & Monetization Hub
+# NextGen Tech Notes · Content Ops
 
-A production-ready AI blogging engine and monetization platform built with **FastAPI**, **Modern Vanilla CSS/JS**, and **Vercel Serverless**. Designed specifically for [NextGen Tech Notes](https://aigen023.blogspot.com/) to automate high-ranking technical tutorials, rewrite existing content for **Google AdSense approval**, generate **free AI featured images**, and monetize via **Instamojo eBook sales** and **affiliates**.
+A single-publication content workflow for [NextGen Tech Notes](https://aigen023.blogspot.com/), built with FastAPI, vanilla JavaScript, SQLite, and Vercel serverless functions. The owner selects the topic and AI provider, reviews and edits the saved article, then explicitly confirms any Blogger draft creation or live-post navigation update.
 
----
+## Current capabilities
 
-## 🌟 Key Features
+- User-selected article generation and optional curated topic ideas. Suggestions are not live trend or keyword metrics.
+- Explicitly selected AI provider and model; no automatic provider fallback.
+- Local article drafts, Markdown editing, HTML preview, SEO/schema warnings, and optional product/affiliate inserts.
+- Optional Pexels or Unsplash search. Results are inserted only after selection and include photographer/provider attribution; image generation is disabled.
+- Confirmed Blogger draft creation. The app does not publish drafts automatically.
+- Manually triggered previous/next navigation sync for LIVE Blogger posts. It changes live post HTML only after confirmation and reports partial failures.
+- Google Search Console and Blogger API integrations when owner OAuth is configured.
 
-1. **Multi-Model LLM Engine**:
-   - **Groq Cloud**: 100% free, ultra-fast generation (Llama 3.3 70B & DeepSeek R1).
-   - **Google Gemini**: Free tier (Gemini 2.5 Flash & Pro).
-   - **Cohere**: Free trial (Command R+).
-   - **OpenAI & Claude**: Optional BYOK models (GPT-4o, Claude 3.5 Sonnet).
+Automated checks are advisory, not guarantees of article accuracy, search ranking, AdSense approval, or income. The application does not claim to have tested generated code or browsed sources unless that actually occurred.
 
-2. **AdSense Content Rewriter**:
-   - Connects to your Blogger blog via Google API v3 to list previous posts.
-   - Transforms thin or generic tutorials into comprehensive, 1,400–2,200+ word authority guides.
-   - Injects reproducible code, realistic terminal tracebacks, prerequisites, and FAQ schemas.
+## Run locally
 
-3. **100% Free AI Blog Cover Studio**:
-   - Powered by Pollinations.ai (Flux / SDXL).
-   - Zero signup, zero API keys, instant 1200x630 featured images.
-
-4. **Instamojo eBook & Affiliate Sales Engine**:
-   - Integrates your active eBook: [Code to Career — The Python Fresher to Job-Ready Developer](https://codetocareer52.myinstamojo.com/product/code-to-career).
-   - Injects high-converting, responsive eBook CTA banners with instant checkout buttons.
-   - Built-in Affiliate Vault with `rel="sponsored nofollow noopener"` and required disclosure snippets.
-
-5. **Blogger API v3 & Search Console**:
-   - Uploads directly to Blogger as safe **drafts** (never overwrites live posts).
-   - Inspects real organic search queries, clicks, and impressions.
-
----
-
-## 🚀 Deploying to Vercel (Step-by-Step)
-
-### Step 1: Push Code to GitHub
-Ensure all your files are committed and pushed to your GitHub repository:
-```bash
-git add .
-git commit -m "Upgrade to Multi-Model AI Agentic Hub for Vercel"
-git push origin main
-```
-
-### Step 2: Import Project in Vercel
-1. Log in to [Vercel](https://vercel.com/).
-2. Click **Add New...** → **Project**.
-3. Select your GitHub repository (`aigen023-agentic-blog-manager` or your repository name).
-4. Framework Preset: Leave as **Other** (Vercel automatically detects `vercel.json` and Python).
-
-### Step 3: Add Environment Variables in Vercel
-In the Vercel project configuration screen, open **Environment Variables** and add:
-
-| Variable Name | Description | Where to get it |
-| :--- | :--- | :--- |
-| `GROQ_API_KEY` | Free LLM API Key (Llama 3.3 70B) | [console.groq.com](https://console.groq.com/) (100% Free) |
-| `GEMINI_API_KEY` | Google Gemini API Key | [aistudio.google.com](https://aistudio.google.com/) (Free tier) |
-| `GOOGLE_CLIENT_ID` | Google OAuth Client ID | Google Cloud Console |
-| `GOOGLE_CLIENT_SECRET` | Google OAuth Client Secret | Google Cloud Console |
-
-*(You can also configure API keys directly inside the web app settings in your browser).*
-
-### Step 4: Configure Google OAuth Redirect URI
-After deploying, Vercel gives you your live URL (e.g., `https://your-app-name.vercel.app`):
-1. Go to [Google Cloud Console](https://console.cloud.google.com/) → **APIs & Services** → **Credentials**.
-2. Click your OAuth 2.0 Web Client.
-3. Under **Authorized redirect URIs**, add:
-   - `https://your-app-name.vercel.app/api/oauth/callback`
-4. Click **Save**.
-
-Now you can sign in to Google directly from your live Vercel app to fetch Blogger posts, upload drafts, and view Search Console metrics!
-
----
-
-## 🛠️ Local Development (Optional)
-
-If you ever want to run locally with Uvicorn:
-```bash
-pip install -r requirements.txt
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
 uvicorn api.index:app --reload --port 8000
 ```
-Open [http://localhost:8000](http://localhost:8000) in your browser.
+
+Open <http://localhost:8000>. Local article data is stored in `content_ops.db` by default. Set `CONTENT_OPS_DB` to select another SQLite path.
+
+AI generation, image search, and Google integrations remain unavailable until their server-side credentials are configured. Manual editing and local draft storage do not require AI credentials.
+
+## Vercel configuration
+
+The repository contains `vercel.json` for its FastAPI/static frontend deployment. Set environment variables in the Vercel project settings; do not put real credentials in source code, HTML, JavaScript, `.env.example`, or issue reports.
+
+| Variable | Purpose |
+| --- | --- |
+| `GOOGLE_CLIENT_ID` | Google OAuth web client ID |
+| `GOOGLE_CLIENT_SECRET` | Google OAuth client secret |
+| `GOOGLE_OAUTH_REDIRECT_URI` | Exact deployed callback URL, ending in `/api/oauth/callback` |
+| `GROQ_API_KEY` | Optional server-side Groq credential |
+| `GEMINI_API_KEY` | Optional server-side Gemini credential |
+| `COHERE_API_KEY` | Optional server-side Cohere credential |
+| `OPENAI_API_KEY` | Optional server-side OpenAI credential |
+| `ANTHROPIC_API_KEY` | Optional server-side Anthropic credential |
+| `PEXELS_API_KEY` | Optional server-side Pexels search credential |
+| `UNSPLASH_ACCESS_KEY` | Optional server-side Unsplash search credential |
+
+Use only providers/models that are currently available to your account. Provider limits and pricing can change; check each provider's current terms before enabling it. Stock image APIs also have their own attribution rules and quotas. This app does not automatically switch providers or claim any provider is unlimited or permanently free.
+
+In Google Cloud, enable the Blogger API and Search Console API, configure the OAuth consent screen, and add the exact `GOOGLE_OAUTH_REDIRECT_URI` value to the OAuth client's authorized redirect URIs. Owner identity is checked server-side. OAuth credentials and provider keys must remain in deployment secrets.
+
+## Important hosting limitation
+
+Vercel function storage is temporary. This app's SQLite database defaults to `/tmp/content_ops.db` on Vercel, so locally saved articles, OAuth state, and settings may not persist across function instances or deployments. Do not rely on it as durable production storage. A durable database/storage service would add an external dependency and may have cost or quota limits; none is added here. Vercel serverless functions also do not create a continuously running queue worker. Generation and synchronization run only after user actions.
+
+Free hosting and provider quotas are subject to platform limits and can change. This repository cannot guarantee zero cost for every hosting account or third-party service.
+
+## Deployment access control
+
+The current Vercel API does not enforce owner authentication on article generation and local article CRUD routes; Google OAuth is used for Google integrations, not as a global app login. Enable deployment access protection before configuring AI provider keys on a publicly reachable deployment. If your Vercel plan does not provide that protection, do not expose provider keys until an app-level owner login is implemented. A complete single-owner authentication gate is not implemented in this increment.
+
+## Verification
+
+Run the unit tests with:
+
+```powershell
+python -m unittest discover -s tests -v
+```
+
+Mocked tests validate local logic only. They do not prove that a live OAuth login, Blogger draft creation, Search Console report, AI provider request, Vercel deployment, or Pexels/Unsplash request succeeds. Those require credentials and a controlled live test.

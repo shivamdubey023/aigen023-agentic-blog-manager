@@ -1,7 +1,8 @@
 import unittest
-from core.image_generator import create_image_prompt_for_topic, generate_featured_image_url, featured_image_html
+from unittest.mock import patch
+from core.image_renderer import featured_image_html
 from core.rewriter import html_to_clean_text
-from core.llm_engine import SUPPORTED_PROVIDERS
+from core.llm_engine import SUPPORTED_PROVIDERS, generate_technical_article
 
 class EngineTests(unittest.TestCase):
     def test_providers_contain_expected_models(self):
@@ -10,19 +11,41 @@ class EngineTests(unittest.TestCase):
         self.assertIn("cohere", SUPPORTED_PROVIDERS)
         self.assertIn("openai", SUPPORTED_PROVIDERS)
         self.assertIn("anthropic", SUPPORTED_PROVIDERS)
-        self.assertIn("llama-3.3-70b-versatile", SUPPORTED_PROVIDERS["groq"]["models"])
-        self.assertIn("gemini-2.5-flash", SUPPORTED_PROVIDERS["gemini"]["models"])
+        for provider in SUPPORTED_PROVIDERS.values():
+            self.assertIn(provider["default_model"], provider["models"])
 
-    def test_image_prompt_and_url_generation(self):
-        prompt = create_image_prompt_for_topic("FastAPI Docker Microservices")
-        self.assertIn("FastAPI Docker Microservices", prompt)
-        url = generate_featured_image_url(prompt, width=1200, height=630)
-        self.assertTrue(url.startswith("https://image.pollinations.ai/prompt/"))
-        self.assertIn("width=1200", url)
-        self.assertIn("height=630", url)
-        html = featured_image_html(url)
+    @patch("core.llm_engine.resolve_key_for_provider", return_value="selected-key")
+    @patch("core.llm_engine._call_gemini")
+    @patch("core.llm_engine._call_groq", side_effect=RuntimeError("quota exceeded"))
+    def test_generation_does_not_switch_provider_after_selected_provider_fails(
+        self, groq_call, gemini_call, _resolve_key
+    ):
+        with self.assertRaisesRegex(RuntimeError, "quota exceeded"):
+            generate_technical_article(
+                provider="groq",
+                model=SUPPORTED_PROVIDERS["groq"]["default_model"],
+                topic="Python database migrations",
+            )
+        groq_call.assert_called_once()
+        gemini_call.assert_not_called()
+
+    @patch("core.llm_engine.resolve_key_for_provider", return_value="")
+    @patch("core.llm_engine._call_groq")
+    def test_generation_with_missing_provider_key_fails_without_api_call(self, groq_call, _resolve_key):
+        with self.assertRaisesRegex(ValueError, "No API key is configured for groq"):
+            generate_technical_article(provider="groq", topic="Python database migrations")
+        groq_call.assert_not_called()
+
+    def test_image_renderer_requires_https_and_escapes_alt_text(self):
+        html = featured_image_html(
+            "https://images.pexels.com/photos/example.jpg",
+            alt_text='Photo of "Python" & APIs',
+        )
         self.assertIn("<img", html)
         self.assertIn("featured-image-wrapper", html)
+        self.assertIn("&quot;Python&quot; &amp; APIs", html)
+        with self.assertRaisesRegex(ValueError, "HTTPS"):
+            featured_image_html("http://example.com/photo.jpg")
 
     def test_html_cleaner_for_rewriter(self):
         dirty_html = "<h1>Old Title</h1><p>This is a paragraph with <a href='https://example.com'>link</a>.</p><pre><code>code block</code></pre>"

@@ -19,17 +19,16 @@ from core.env_config import (
     get_google_client_id, get_google_client_secret, get_google_redirect_uri,
     get_groq_key, get_gemini_key, get_cohere_key, get_openai_key, get_anthropic_key,
 )
-from core.image_generator import (
-    create_image_prompt_for_topic, featured_image_html, generate_featured_image_url,
-    generate_technical_diagram_url, section_image_html,
-)
+from core.image_renderer import featured_image_html, section_image_html
 from core.llm_engine import SUPPORTED_PROVIDERS, generate_technical_article, resolve_key_for_provider
+from core.stock_images import IMAGE_PROVIDERS, provider_status as image_provider_status, search_stock_images
 from core.rewriter import html_to_clean_text, rewrite_blog_for_adsense
 from core.trending_topics import get_random_trending_topic, list_all_trending_topics
 from property_a_blog.blogger_client import (
     BLOG_URL, create_draft, finish_oauth, get_credentials, list_blogs, list_posts,
-    oauth_error_hint, search_console_report, start_oauth,
+    oauth_error_hint, search_console_report, start_oauth, update_live_post_navigation,
 )
+from property_a_blog.navigation import navigation_content, order_live_posts
 from property_a_blog.seo_optimizer import (
     affiliate_box, content_quality_checks, ebook_card_box, render_article,
 )
@@ -53,18 +52,16 @@ app.add_middleware(
 
 # Request Models
 class GenerateArticleRequest(BaseModel):
-    provider: str = Field(default="groq", description="AI provider")
-    model: Optional[str] = Field(default=None, description="Specific model ID")
-    api_key: Optional[str] = Field(default="", description="Provider API key")
+    provider: str = Field(..., description="AI provider selected by the user")
+    model: str = Field(..., min_length=1, description="Specific model ID selected by the user")
     topic: str = Field(..., min_length=2, description="Topic or title")
     primary_keyword: Optional[str] = Field(default="", description="Primary SEO keyword")
     audience: Optional[str] = Field(default="Working developer", description="Audience level")
     notes: Optional[str] = Field(default="", description="Technical notes & requirements")
 
 class RewriteArticleRequest(BaseModel):
-    provider: str = Field(default="groq")
-    model: Optional[str] = None
-    api_key: Optional[str] = ""
+    provider: str
+    model: str = Field(..., min_length=1, description="Specific model ID selected by the user")
     original_title: str
     original_content: str
     primary_keyword: Optional[str] = ""
@@ -75,6 +72,10 @@ class ImageGenerateRequest(BaseModel):
     topic: Optional[str] = ""
     width: Optional[int] = 1200
     height: Optional[int] = 630
+
+class ImageSearchRequest(BaseModel):
+    query: str = Field(..., min_length=2, max_length=120)
+    provider: str
 
 class RenderArticleRequest(BaseModel):
     markdown_text: str
@@ -105,6 +106,11 @@ class CreateBloggerDraftRequest(BaseModel):
     title: str
     rendered_html: str
     article_id: Optional[int] = None
+    confirmed: bool = False
+
+class SyncNavigationRequest(BaseModel):
+    blog_id: str
+    confirmed: bool = False
 
 class SaveAffiliateRequest(BaseModel):
     product_name: str
@@ -122,16 +128,14 @@ class SaveProductRequest(BaseModel):
     product_id: Optional[int] = None
 
 class AutopilotRequest(BaseModel):
-    topic: Optional[str] = ""
+    topic: str = Field(..., min_length=2, description="User-selected topic to generate")
     primary_keyword: Optional[str] = ""
-    provider: Optional[str] = "groq"
-    model: Optional[str] = None
+    provider: str = Field(..., description="AI provider selected by the user")
+    model: str = Field(..., min_length=1, description="Model selected by the user")
     include_product: Optional[bool] = False
     product_id: Optional[int] = None
     include_affiliate: Optional[bool] = False
     affiliate_id: Optional[int] = None
-    upload_to_blogger: Optional[bool] = False
-    blog_id: Optional[str] = ""
 
 # API Routes
 @app.get("/api/health")
@@ -156,66 +160,59 @@ def get_providers():
     return {
         "providers": SUPPORTED_PROVIDERS,
         "configured": configured,
-        "recommended": "groq" if configured["groq"] else ("gemini" if configured["gemini"] else "groq"),
     }
 
 @app.get("/api/trending")
 def get_trending_topics():
-    """Return trending tech topics designed to rank and produce high AdSense CPC."""
+    """Return curated topic ideas without claiming trend or keyword metrics."""
     return {
         "topics": list_all_trending_topics(),
         "random_suggestion": get_random_trending_topic(),
+        "source": "Curated suggestions; not validated against Search Console or keyword tools.",
+        "metrics_available": False,
     }
 
 @app.post("/api/autopilot")
-def run_autopilot(req: AutopilotRequest, request: Request):
+def run_autopilot(req: AutopilotRequest):
     """
-    One-click autonomous agent loop:
-    1. Selects or takes a trending topic.
-    2. Generates humanized 1,500+ word technical tutorial with real code.
-    3. Creates permanent AI featured cover banner and architecture workflow diagram.
-    4. Injects TOC, TechArticle & FAQPage Schema, and optional product / affiliate card.
-    5. Saves draft to database and optionally creates a Blogger draft!
+    Generate a locally stored, user-directed article:
+    1. Requires a user-selected topic and AI provider.
+    2. Generates a technical tutorial for the selected topic.
+    3. Adds TOC, structured data, and optional product / affiliate card.
+    4. Saves a local draft. Image selection and Blogger draft creation are separate actions.
     """
-    chosen_provider = req.provider or "groq"
+    topic = (req.topic or "").strip()
+    chosen_provider = req.provider.strip()
+    if len(topic) < 2:
+        raise HTTPException(status_code=400, detail="Choose and confirm an article topic before generating.")
+    if not chosen_provider:
+        raise HTTPException(status_code=400, detail="Select an AI provider before generating.")
+    if chosen_provider not in SUPPORTED_PROVIDERS:
+        raise HTTPException(status_code=400, detail=f"Unsupported AI provider: {chosen_provider}.")
+    model = req.model.strip()
+    if model not in SUPPORTED_PROVIDERS[chosen_provider]["models"]:
+        raise HTTPException(status_code=400, detail="Choose a supported model for the selected provider.")
     if not resolve_key_for_provider(chosen_provider):
-        if resolve_key_for_provider("groq"):
-            chosen_provider = "groq"
-        elif resolve_key_for_provider("gemini"):
-            chosen_provider = "gemini"
-        elif resolve_key_for_provider("cohere"):
-            chosen_provider = "cohere"
-
-    if not req.topic:
-        suggested = get_random_trending_topic()
-        topic = suggested["topic"]
-        keyword = suggested["keyword"]
-    else:
-        topic = req.topic
-        keyword = req.primary_keyword or req.topic
+        raise HTTPException(
+            status_code=400,
+            detail=f"No API key is configured for {chosen_provider}. Configure it or choose another provider.",
+        )
+    keyword = (req.primary_keyword or "").strip() or topic
 
     try:
-        # 1. Generate humanized article
+        # 1. Generate the selected topic with the selected provider only.
         draft = generate_technical_article(
             provider=chosen_provider,
-            model=req.model,
+            model=model,
             topic=topic,
             primary_keyword=keyword,
             audience="Working developer",
-            notes="Write in a natural, opinionated human voice with deep technical rigor. Include clear prerequisites, full reproducible code, a realistic failure traceback with fix, verification checklist, and an FAQ section.",
+            notes="Explain assumptions and label unverified details. Do not invent test results, citations, or personal experience.",
         )
         title_match = re.search(r"(?m)^#\s+(.+)$", draft)
         title = title_match.group(1).strip() if title_match else topic
 
-        # 2. Generate free featured banner & architecture diagram (no watermarks)
-        img_prompt = create_image_prompt_for_topic(topic)
-        featured_image_url = generate_featured_image_url(img_prompt)
-        diagram_image_url = generate_technical_diagram_url(topic)
-        
-        img_html = featured_image_html(featured_image_url, alt_text=title)
-        diagram_html = section_image_html(diagram_image_url, caption=f"Architecture & Execution Workflow for {topic}")
-
-        # 3. Product / eBook card (optional)
+        # 2. Product / eBook card (optional)
         product_snippet = ""
         if req.include_product:
             prod = None
@@ -232,7 +229,7 @@ def run_autopilot(req: AutopilotRequest, request: Request):
                     tagline=prod.get("description") or "Recommended comprehensive developer resource.",
                 )
 
-        # 4. Affiliate snippet (optional)
+        # 3. Affiliate snippet (optional)
         affiliate_snippet = ""
         if req.include_affiliate:
             aff = None
@@ -249,7 +246,7 @@ def run_autopilot(req: AutopilotRequest, request: Request):
                     disclosure=aff["disclosure_snippet"],
                 )
 
-        # 5. Render HTML with schema, TOC, and dual illustrations
+        # 4. Render HTML with schema and TOC. Images are explicitly chosen later.
         rendered, schema = render_article(
             draft,
             title,
@@ -257,11 +254,9 @@ def run_autopilot(req: AutopilotRequest, request: Request):
             include_toc=True,
             ebook_html=product_snippet,
             affiliate_html=affiliate_snippet,
-            featured_image_html=img_html,
-            section_image_html=diagram_html,
         )
 
-        # 6. Save to database
+        # 5. Save to database.
         article_id = db.save_article(
             topic=topic,
             primary_keyword=keyword,
@@ -271,12 +266,6 @@ def run_autopilot(req: AutopilotRequest, request: Request):
             schema_json=schema,
             status="DRAFT",
         )
-
-        blogger_res = None
-        if req.upload_to_blogger and req.blog_id:
-            creds, _ = resolve_current_credentials(request)
-            if creds:
-                blogger_res = create_draft(creds, req.blog_id, title, rendered)
 
         warnings = content_quality_checks(title, draft)
         word_count = len(re.findall(r"\b[\w'-]+\b", draft))
@@ -288,29 +277,33 @@ def run_autopilot(req: AutopilotRequest, request: Request):
             "topic": topic,
             "keyword": keyword,
             "word_count": word_count,
-            "image_url": featured_image_url,
-            "diagram_url": diagram_image_url,
             "markdown": draft,
             "rendered_html": rendered,
             "warnings": warnings,
-            "blogger_result": blogger_res,
         }
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Autopilot generation failed: {str(exc)}")
 
 @app.post("/api/generate")
 def generate_article(req: GenerateArticleRequest):
-    provider = req.provider or "groq"
-    key = resolve_key_for_provider(provider, req.api_key)
+    provider = req.provider.strip()
+    if not provider:
+        raise HTTPException(status_code=400, detail="Select an AI provider before generating.")
+    if provider not in SUPPORTED_PROVIDERS:
+        raise HTTPException(status_code=400, detail=f"Unsupported AI provider: {provider}.")
+    model = req.model.strip()
+    if model not in SUPPORTED_PROVIDERS[provider]["models"]:
+        raise HTTPException(status_code=400, detail="Choose a supported model for the selected provider.")
+    key = resolve_key_for_provider(provider)
     if not key:
         raise HTTPException(
             status_code=400,
-            detail=f"Missing API key for {provider}. Add it to your .env file or settings.",
+            detail=f"No server-side API key is configured for {provider}. Add it to the deployment environment or choose another provider.",
         )
     try:
         draft = generate_technical_article(
             provider=provider,
-            model=req.model,
+            model=model,
             api_key=key,
             topic=req.topic,
             primary_keyword=req.primary_keyword or req.topic,
@@ -333,17 +326,24 @@ def generate_article(req: GenerateArticleRequest):
 
 @app.post("/api/rewrite")
 def rewrite_article(req: RewriteArticleRequest):
-    provider = req.provider or "groq"
-    key = resolve_key_for_provider(provider, req.api_key)
+    provider = req.provider.strip()
+    if not provider:
+        raise HTTPException(status_code=400, detail="Select an AI provider before rewriting.")
+    if provider not in SUPPORTED_PROVIDERS:
+        raise HTTPException(status_code=400, detail=f"Unsupported AI provider: {provider}.")
+    model = req.model.strip()
+    if model not in SUPPORTED_PROVIDERS[provider]["models"]:
+        raise HTTPException(status_code=400, detail="Choose a supported model for the selected provider.")
+    key = resolve_key_for_provider(provider)
     if not key:
         raise HTTPException(
             status_code=400,
-            detail=f"Missing API key for {provider}. Add it to your .env file.",
+            detail=f"No server-side API key is configured for {provider}. Add it to the deployment environment or choose another provider.",
         )
     try:
         rewritten = rewrite_blog_for_adsense(
             provider=provider,
-            model=req.model,
+            model=model,
             api_key=key,
             original_title=req.original_title,
             original_content_html_or_md=req.original_content,
@@ -366,19 +366,27 @@ def rewrite_article(req: RewriteArticleRequest):
 
 @app.post("/api/generate-image")
 def generate_image(req: ImageGenerateRequest):
-    prompt = req.prompt.strip() if req.prompt else ""
-    if not prompt and req.topic:
-        prompt = create_image_prompt_for_topic(req.topic)
-    elif not prompt:
-        prompt = "Modern 3D isometric cybersecurity and coding architecture, dark background with vibrant cyan and violet neon"
+    raise HTTPException(
+        status_code=410,
+        detail="AI image generation is disabled to avoid unexpected usage charges. Use the optional stock-image search instead.",
+    )
 
-    url = generate_featured_image_url(prompt, width=req.width or 1200, height=req.height or 630)
-    html_snippet = featured_image_html(url, alt_text=prompt[:100])
-    return {
-        "prompt": prompt,
-        "image_url": url,
-        "html_snippet": html_snippet,
-    }
+@app.get("/api/images/providers")
+def get_image_provider_status():
+    return {"configured": image_provider_status()}
+
+@app.post("/api/images/search")
+def search_images(req: ImageSearchRequest):
+    provider = req.provider.strip().lower()
+    if provider not in IMAGE_PROVIDERS:
+        raise HTTPException(status_code=400, detail="Choose Pexels or Unsplash.")
+    try:
+        images = search_stock_images(req.query, provider)
+        return {"provider": provider, "images": images}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 @app.post("/api/render")
 def render_post(req: RenderArticleRequest):
@@ -409,13 +417,15 @@ def render_post(req: RenderArticleRequest):
                 price=req.ebook_price or "₹499",
             )
 
-    img_snippet = ""
-    if req.featured_image_url:
-        img_snippet = featured_image_html(req.featured_image_url)
-
-    diag_snippet = ""
-    if req.section_image_url:
-        diag_snippet = section_image_html(req.section_image_url, caption="Architecture & Technical Workflow")
+    try:
+        img_snippet = featured_image_html(req.featured_image_url) if req.featured_image_url else ""
+        diag_snippet = (
+            section_image_html(req.section_image_url, caption="Architecture & Technical Workflow")
+            if req.section_image_url
+            else ""
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     rendered, schema = render_article(
         req.markdown_text,
@@ -447,6 +457,18 @@ def get_single_article(article_id: int):
     if not article:
         raise HTTPException(status_code=404, detail="Article not found")
     return article
+
+@app.delete("/api/articles/{article_id}")
+def delete_single_article(article_id: int, confirmed: bool = False):
+    if not confirmed:
+        raise HTTPException(status_code=400, detail="Confirm local article deletion explicitly.")
+    try:
+        deleted = db.delete_article(article_id, require_blogger_post=True)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Article not found.")
+    return {"success": True, "message": "Local article copy deleted; the Blogger draft was not changed."}
 
 @app.post("/api/articles")
 def save_single_article(req: SaveArticleRequest):
@@ -672,30 +694,103 @@ def get_blogger_posts(request: Request, blog_id: str, limit: int = 50):
 
 @app.post("/api/blogger/draft")
 def upload_blogger_draft(req: CreateBloggerDraftRequest, request: Request):
+    if not req.confirmed:
+        raise HTTPException(status_code=400, detail="Review the article and explicitly confirm Blogger draft creation.")
+    if not req.article_id:
+        raise HTTPException(status_code=400, detail="Save the article locally before creating a Blogger draft.")
+    creds, _ = resolve_current_credentials(request)
+    if not creds:
+        raise HTTPException(status_code=401, detail="Google account not connected.")
+    article = db.get_article(req.article_id)
+    if not article:
+        raise HTTPException(status_code=404, detail="Save the article locally before creating a Blogger draft.")
+    if article.get("blogger_post_id"):
+        raise HTTPException(status_code=409, detail="This article is already linked to a Blogger post.")
+    try:
+        # Avoid a second draft after a lost response when the first draft is still discoverable by title.
+        existing_posts = list_posts(creds, req.blog_id, limit=500)
+        if any(str(post.get("title", "")).strip().casefold() == req.title.strip().casefold()
+               for post in existing_posts):
+            raise HTTPException(
+                status_code=409,
+                detail="A Blogger post with this exact title already exists. Inspect Blogger before retrying.",
+            )
+        created = create_draft(creds, req.blog_id, req.title, req.rendered_html)
+        post_id = created.get("id", "")
+        post_url = created.get("url", "")
+        if not post_id:
+            raise RuntimeError("Blogger did not return a post ID; inspect Blogger before attempting another draft.")
+        db.save_article(
+            topic=article["topic"],
+            primary_keyword=article["primary_keyword"],
+            title=req.title,
+            markdown_body=article["markdown_body"],
+            rendered_html=req.rendered_html,
+            schema_json=article.get("schema_json", "{}"),
+            status="DRAFT",
+            article_id=req.article_id,
+            blogger_post_id=post_id,
+            blogger_blog_id=req.blog_id,
+        )
+        return {"success": True, "post_id": post_id, "url": post_url}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Blogger draft creation failed: {str(exc)}") from exc
+
+@app.post("/api/blogger/navigation/sync")
+def sync_blogger_navigation(req: SyncNavigationRequest, request: Request):
+    if not req.confirmed:
+        raise HTTPException(
+            status_code=400,
+            detail="Confirm that live Blogger post content may be updated with previous/next links.",
+        )
     creds, _ = resolve_current_credentials(request)
     if not creds:
         raise HTTPException(status_code=401, detail="Google account not connected.")
     try:
-        created = create_draft(creds, req.blog_id, req.title, req.rendered_html)
-        post_id = created.get("id", "")
-        post_url = created.get("url", "")
-        if req.article_id:
-            art = db.get_article(req.article_id)
-            if art:
-                db.save_article(
-                    topic=art["topic"],
-                    primary_keyword=art["primary_keyword"],
-                    title=req.title,
-                    markdown_body=art["markdown_body"],
-                    rendered_html=req.rendered_html,
-                    status="DRAFT",
-                    article_id=req.article_id,
-                    blogger_post_id=post_id,
-                    blogger_blog_id=req.blog_id,
-                )
-        return {"success": True, "post_id": post_id, "url": post_url}
+        posts, skipped = order_live_posts(list_posts(creds, req.blog_id, limit=500))
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Blogger upload failed: {str(exc)}")
+        raise HTTPException(status_code=502, detail=f"Could not load Blogger posts for navigation: {exc}") from exc
+
+    updated = 0
+    unchanged = 0
+    errors = []
+    for index, post in enumerate(posts):
+        previous = posts[index - 1] if index > 0 else None
+        next_post = posts[index + 1] if index + 1 < len(posts) else None
+        desired = navigation_content(str(post.get("content") or ""), previous, next_post)
+        if desired == str(post.get("content") or ""):
+            unchanged += 1
+            continue
+        try:
+            update_live_post_navigation(
+                creds,
+                req.blog_id,
+                str(post["id"]),
+                desired,
+                explicit_confirmation=True,
+            )
+            updated += 1
+        except Exception as exc:
+            errors.append({
+                "post_id": str(post.get("id") or ""),
+                "title": str(post.get("title") or "")[:200],
+                "error": str(exc)[:300],
+            })
+    return {
+        "success": not errors,
+        "total_live": len(posts) + len(skipped),
+        "updated": updated,
+        "unchanged": unchanged,
+        "skipped_missing_published_date": skipped,
+        "errors": errors,
+        "message": (
+            "Navigation synchronization completed."
+            if not errors
+            else "Navigation synchronization was partial; inspect the per-post errors before retrying."
+        ),
+    }
 
 @app.get("/api/search-console")
 def get_search_console(days: int = 28):

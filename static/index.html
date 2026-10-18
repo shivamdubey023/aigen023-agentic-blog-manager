@@ -38,7 +38,7 @@
     <!-- Top Navigation (Desktop) -->
     <nav class="app-nav desktop-nav">
       <button class="nav-tab active" data-tab="tab-autopilot">
-        <span class="tab-icon">⚡</span> 1-Click Autopilot
+        <span class="tab-icon">✍️</span> Create an Article
       </button>
       <button class="nav-tab" data-tab="tab-rewriter">
         <span class="tab-icon">🔄</span> Fix Low-Value Posts
@@ -63,46 +63,61 @@
     <!-- Main Content Area -->
     <main class="app-main">
 
-      <!-- TAB 1: 1-CLICK AUTOPILOT (ZERO THINKING REQUIRED) -->
+      <!-- TAB 1: USER-DIRECTED ARTICLE CREATION -->
       <section class="tab-pane active" id="tab-autopilot">
         <div class="hero-autopilot-card glass-card">
           <div class="hero-content">
-            <span class="badge purple">⚡ 1-Click Autonomous Publishing</span>
-            <h2>Don't have time to brainstorm? Let the bot do everything.</h2>
-            <p>Picks a verified high-CPC trending tech topic, generates a 1,600+ word humanized guide with real code and tracebacks, creates a permanent HD cover image, attaches the <em>Code to Career</em> Instamojo eBook card, and prepares a draft for your Blogger blog.</p>
+            <span class="badge purple">User-directed article creation</span>
+            <h2>You choose the topic. The assistant helps create a draft.</h2>
+            <p>Enter an article idea or request an optional curated suggestion. Suggestions are not verified search trends or keyword metrics. Nothing is generated until you confirm a topic, select a configured provider, and start generation.</p>
             
             <div class="trending-topic-preview" id="trending-topic-box">
-              <div class="topic-tag">Current Trending Pick:</div>
-              <h3 id="current-trending-title">Loading trending tech topic...</h3>
+              <div class="topic-tag">Optional topic idea · not selected</div>
+              <h3 id="current-trending-title">Request an optional topic idea</h3>
               <div class="topic-meta">
-                <span class="badge blue" id="trending-category">Python & Backend</span>
-                <span class="badge green" id="trending-cpc">High AdSense CPC</span>
-                <button class="btn btn-secondary btn-sm" id="btn-shuffle-topic">🔀 Pick Another Topic</button>
+                <span class="badge blue" id="trending-category">Curated idea</span>
+                <span class="badge" id="trending-cpc">No search metrics verified</span>
+                <button class="btn btn-secondary btn-sm" id="btn-shuffle-topic">Suggest an idea</button>
+                <button class="btn btn-secondary btn-sm" id="btn-use-topic">Use this idea</button>
               </div>
             </div>
 
             <div class="autopilot-controls">
               <div class="form-row">
                 <div class="form-group flex-1">
-                  <label for="autopilot-provider">AI Model Engine (from .env)</label>
+                  <label for="autopilot-provider">AI provider</label>
                   <select id="autopilot-provider" class="form-control">
-                    <option value="groq" selected>Groq Cloud (openai/gpt-oss-120b · Ultra Fast & Free)</option>
-                    <option value="gemini">Google Gemini 3.8 Flash (Active Free Tier · High Quality)</option>
-                    <option value="cohere">Cohere (command-r-08-2024 · High Rigor)</option>
+                    <option value="" selected disabled>Choose a provider</option>
+                    <option value="groq">Groq</option>
+                    <option value="gemini">Google Gemini</option>
+                    <option value="cohere">Cohere</option>
+                    <option value="openai">OpenAI</option>
+                    <option value="anthropic">Anthropic Claude</option>
                   </select>
                 </div>
                 <div class="form-group flex-1">
-                  <label for="autopilot-custom-topic">Or Override with Custom Topic (Optional)</label>
-                  <input type="text" id="autopilot-custom-topic" class="form-control" placeholder="Leave blank to use trending topic above">
+                  <label for="autopilot-custom-topic">Topic or exact article idea (required)</label>
+                  <input type="text" id="autopilot-custom-topic" class="form-control" placeholder="Enter your topic, or choose the suggestion above" required>
                 </div>
               </div>
+              <div class="form-group">
+                <label for="autopilot-custom-keyword">Primary keyword (optional)</label>
+                <input type="text" id="autopilot-custom-keyword" class="form-control" placeholder="Defaults to your topic if left blank">
+              </div>
+              <div class="form-group">
+                <label for="autopilot-model">AI model</label>
+                <select id="autopilot-model" class="form-control">
+                  <option value="" selected disabled>Choose a provider first</option>
+                </select>
+              </div>
+              <p id="provider-status" class="section-desc" aria-live="polite">Checking server-side AI provider configuration…</p>
 
               <!-- Monetization / Product Attachment Selector -->
               <div class="form-row mt-12">
                 <div class="form-group flex-1">
                   <label for="autopilot-monetize-type">Monetization / Recommendations</label>
                   <select id="autopilot-monetize-type" class="form-control">
-                    <option value="none" selected>🛡️ Pure Technical Post (No Products - Best for AdSense Approval)</option>
+                    <option value="none" selected>Pure technical post (no product attached)</option>
                     <option value="product">📘 Attach My Product / eBook (e.g. Instamojo)</option>
                     <option value="affiliate">🔗 Attach Affiliate Recommendation</option>
                   </select>
@@ -121,16 +136,9 @@
                 </div>
               </div>
 
-              <div class="autopilot-toggles mt-10">
-                <label class="toggle-control">
-                  <input type="checkbox" id="autopilot-toggle-blogger">
-                  <span>Auto-Upload to Blogger Drafts (when Blogger is connected)</span>
-                </label>
-              </div>
-
               <button class="btn btn-primary btn-large full-width mt-12" id="btn-run-autopilot">
                 <span class="btn-spinner hidden" id="autopilot-spinner"></span>
-                🚀 Launch 1-Click Autopilot Generator &rarr;
+                Generate this article draft &rarr;
               </button>
             </div>
           </div>
@@ -139,8 +147,8 @@
         <!-- Autopilot Result Box -->
         <div class="card glass-card mt-20 hidden" id="autopilot-result-card">
           <div class="card-header">
-            <h2>Autopilot Generation Completed!</h2>
-            <span class="badge green">Ready for Review</span>
+            <h2>Article draft ready for review</h2>
+            <span class="badge green">Saved locally</span>
           </div>
           <div id="autopilot-result-body"></div>
           <div class="action-buttons-group mt-16">
@@ -154,10 +162,30 @@
         <div class="grid-2col">
           <div class="card glass-card">
             <div class="card-header">
-              <h2>Fix Low-Value Content for AdSense</h2>
-              <span class="badge yellow">AdSense Quality Fixer</span>
+              <h2>Review and improve an existing article</h2>
+              <span class="badge yellow">Editorial assistant</span>
             </div>
-            <p class="section-desc">Google AdSense rejects blogs with thin, generic tutorials. Choose an existing post from your Blogger account or paste previous text to expand it into an authoritative, humanized masterclass.</p>
+            <p class="section-desc">Choose a post from Blogger or paste your own content, then select a configured provider. Suggestions are editorial assistance only and do not guarantee AdSense approval or search performance.</p>
+
+            <div class="form-row">
+              <div class="form-group flex-1">
+                <label for="rewrite-provider">AI provider</label>
+                <select id="rewrite-provider" class="form-control">
+                  <option value="" selected disabled>Choose a provider</option>
+                  <option value="groq">Groq</option>
+                  <option value="gemini">Google Gemini</option>
+                  <option value="cohere">Cohere</option>
+                  <option value="openai">OpenAI</option>
+                  <option value="anthropic">Anthropic Claude</option>
+                </select>
+              </div>
+              <div class="form-group flex-1">
+                <label for="rewrite-model">Model</label>
+                <select id="rewrite-model" class="form-control">
+                  <option value="" selected disabled>Choose a provider first</option>
+                </select>
+              </div>
+            </div>
 
             <div class="form-group">
               <label for="rewrite-blogger-select">Select Post from Blogger</label>
@@ -181,7 +209,7 @@
 
             <button class="btn btn-primary full-width" id="btn-run-rewrite">
               <span class="btn-spinner hidden" id="rewrite-spinner"></span>
-              ⚡ Humanize & Expand for AdSense Approval &rarr;
+              Improve selected content &rarr;
             </button>
           </div>
 
@@ -193,7 +221,7 @@
             <div id="rewrite-result-box" class="summary-body">
               <div class="empty-state">
                 <div class="empty-icon">🛡️</div>
-                <p>The rewriter eliminates thin generic text, injects reproducible code snippets, real error tracebacks, and structured FAQs to maximize AdSense approval chances.</p>
+                <p>Generated suggestions require human review. Check facts, code, references, and policy requirements before publishing.</p>
               </div>
             </div>
             <div class="action-buttons-group hidden" id="rewrite-actions">
@@ -215,17 +243,18 @@
               <div class="form-group flex-1">
                 <label for="gen-provider">AI Model Engine</label>
                 <select id="gen-provider" class="form-control">
-                  <option value="groq" selected>Groq Cloud (Free & Ultra Fast)</option>
-                  <option value="gemini">Google Gemini 3.8 Flash (Free Tier)</option>
-                  <option value="cohere">Cohere (command-r-08-2024)</option>
+                  <option value="" selected disabled>Choose a provider</option>
+                  <option value="groq">Groq</option>
+                  <option value="gemini">Google Gemini</option>
+                  <option value="cohere">Cohere</option>
                   <option value="openai">OpenAI ChatGPT</option>
                   <option value="anthropic">Anthropic Claude</option>
                 </select>
               </div>
               <div class="form-group flex-1">
                 <label for="gen-model">Model Version</label>
-                <select id="gen-model" class="form-control">
-                  <option value="openai/gpt-oss-120b">openai/gpt-oss-120b</option>
+                <select id="gen-model" class="form-control" required>
+                  <option value="" selected disabled>Choose a provider first</option>
                 </select>
               </div>
             </div>
@@ -257,7 +286,7 @@
 
             <button type="submit" class="btn btn-primary full-width" id="btn-run-generate">
               <span class="btn-spinner hidden" id="gen-spinner"></span>
-              Generate 1,500+ Word Humanized Tutorial &rarr;
+              Generate article draft &rarr;
             </button>
           </form>
 
@@ -288,7 +317,8 @@
               </label>
               <button class="btn btn-secondary btn-sm" id="btn-refresh-preview">Refresh</button>
               <button class="btn btn-primary btn-sm" id="btn-save-db">Save Draft</button>
-              <button class="btn btn-accent btn-sm" id="btn-upload-blogger">Publish Draft to Blogger</button>
+              <button class="btn btn-accent btn-sm" id="btn-upload-blogger">Create Blogger Draft</button>
+              <button class="btn btn-secondary btn-sm hidden" id="btn-delete-local-copy">Delete Local Copy</button>
             </div>
           </div>
 
@@ -326,39 +356,38 @@
         </div>
       </section>
 
-      <!-- TAB 5: FREE COVER STUDIO -->
+      <!-- TAB 5: FREE STOCK IMAGE SEARCH -->
       <section class="tab-pane" id="tab-images">
         <div class="card glass-card max-w-800 mx-auto">
           <div class="card-header">
-            <h2>100% Free AI Blog Cover Studio</h2>
-            <span class="badge green">Zero API Key Needed</span>
+            <h2>Free Stock Image Search</h2>
+            <span class="badge green">No image-generation spend</span>
           </div>
-          <p class="section-desc">Generate crisp, high-resolution (1200x630) featured covers using Pollinations.ai that stay online permanently with zero watermarks.</p>
+          <p class="section-desc">Search Pexels or Unsplash, inspect the results, and insert a selected image with photographer/source attribution. Vercel API keys are required for search; image URLs are embedded directly from the providers. Or leave the article image-free.</p>
+          <p class="section-desc">Photos provided by <a href="https://www.pexels.com/" target="_blank" rel="noopener noreferrer">Pexels</a> and <a href="https://unsplash.com/" target="_blank" rel="noopener noreferrer">Unsplash</a>.</p>
 
           <div class="form-group">
-            <label for="img-topic-input">Tutorial Topic</label>
-            <div class="input-with-button">
-              <input type="text" id="img-topic-input" class="form-control" placeholder="e.g. Python Asyncio Event Loop">
-              <button class="btn btn-secondary btn-sm" id="btn-auto-prompt">Make Prompt</button>
-            </div>
+            <label for="image-search-provider">Stock image source</label>
+            <select id="image-search-provider" class="form-control">
+              <option value="" selected disabled>Choose a configured source</option>
+              <option value="pexels">Pexels</option>
+              <option value="unsplash">Unsplash</option>
+            </select>
           </div>
-
           <div class="form-group">
-            <label for="img-prompt-input">Visual Prompt</label>
-            <textarea id="img-prompt-input" class="form-control" rows="3"></textarea>
+            <label for="image-search-query">Search phrase</label>
+            <input type="text" id="image-search-query" class="form-control" placeholder="e.g. Python developer working at a laptop" maxlength="120">
           </div>
-
-          <button class="btn btn-primary full-width" id="btn-generate-image">
+          <p id="image-provider-status" class="section-desc" aria-live="polite">Checking stock image API configuration…</p>
+          <button class="btn btn-primary full-width" id="btn-search-stock">
             <span class="btn-spinner hidden" id="img-spinner"></span>
-            Generate Free Cover &rarr;
+            Search stock photos &rarr;
           </button>
-
           <div class="image-preview-panel mt-20">
-            <div id="image-display-container" class="image-display-empty">
-              <span>Preview will appear here</span>
-            </div>
+            <div id="stock-image-results" class="image-display-empty">Choose a source and search phrase to find stock photos.</div>
+            <div id="image-display-container" class="hidden"></div>
             <div class="image-actions hidden mt-10" id="image-actions">
-              <button class="btn btn-accent full-width" id="btn-insert-image-editor">Attach Cover to Current Post</button>
+              <button class="btn btn-accent full-width" id="btn-insert-image-editor">Insert selected image into article</button>
             </div>
           </div>
         </div>
@@ -468,6 +497,12 @@
           <div class="action-buttons-group">
             <button class="btn btn-secondary" id="btn-refresh-blogs">Refresh Blog List</button>
             <button class="btn btn-primary" id="btn-login-google-alt">Connect Google Account</button>
+          </div>
+
+          <div class="info-callout mt-20">
+            <h4>Previous / next post links</h4>
+            <p class="section-desc">After a post is published, run this manually to synchronize links across live posts. It edits live Blogger content only after confirmation; Vercel does not watch Blogger publication events.</p>
+            <button class="btn btn-secondary" id="btn-sync-navigation">Sync live post navigation</button>
           </div>
 
           <div class="blogger-posts-table-wrapper mt-20">

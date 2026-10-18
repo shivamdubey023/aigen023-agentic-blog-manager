@@ -161,6 +161,108 @@ def handle_blogger_callback():
         st.error(f"Google authorization failed: {exc}")
 
 
+def generate_article(topic, audience, tone, keywords, notes):
+    api_key = secret_section("gemini").get("api_key", "")
+    if not api_key:
+        raise ValueError("Add [gemini] api_key to Streamlit Secrets. Get a key from https://aistudio.google.com/app/apikey.")
+    prompt = (
+        "Write a practical, accurate technology article for NextGen Tech Notes.\n"
+        f"Topic: {topic}\nAudience: {audience}\nStyle: {tone}\nSEO phrases: {keywords or 'none'}\n"
+        f"Owner notes: {notes or 'none supplied'}\n\n"
+        "Return Markdown only, starting with one H1. Include actionable steps, examples, troubleshooting and conclusion. "
+        "Never invent tests, personal experience, stats, sources, or URLs. Mark uncertain claims [VERIFY]. Avoid filler and keyword stuffing."
+    )
+    response = requests.post(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+        params={"key": api_key},
+        json={"contents": [{"parts": [{"text": prompt}]}],
+              "generationConfig": {"temperature": 0.55, "maxOutputTokens": 6500}},
+        timeout=90,
+    )
+    if not response.ok:
+        raise RuntimeError(f"Gemini API returned HTTP {response.status_code}: {response.text[:500]}")
+    data = response.json()
+    try:
+        return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+    except (KeyError, IndexError, TypeError):
+        raise RuntimeError("Gemini returned no article text. Check API access.")
+
+
+def search_commons(query, limit=12):
+    response = requests.get(
+        "https://commons.wikimedia.org/w/api.php",
+        params={"action": "query", "format": "json", "generator": "search",
+                "gsrsearch": f"filetype:bitmap {query}", "gsrnamespace": 6,
+                "gsrlimit": limit, "prop": "imageinfo", "iiprop": "url|extmetadata",
+                "iiurlwidth": 900},
+        headers={"User-Agent": "Aigen023BlogManager/1.0"},
+        timeout=25,
+    )
+    response.raise_for_status()
+    pages = response.json().get("query", {}).get("pages", {})
+    results = []
+    for item in pages.values():
+        info = (item.get("imageinfo") or [{}])[0]
+        meta = info.get("extmetadata", {})
+        def plain(name, default):
+            value = meta.get(name, {}).get("value", default)
+            return re.sub(r"<[^>]+>", "", str(value))
+        image_url = info.get("thumburl") or info.get("url", "")
+        page_url = info.get("descriptionurl", "")
+        if image_url and page_url:
+            results.append({"title": item.get("title", "").replace("File:", ""),
+                            "image_url": image_url, "page_url": page_url,
+                            "license": plain("LicenseShortName", "Check license"),
+                            "artist": plain("Artist", "Author not listed")})
+    return results
+
+
+def article_html(markdown_text, image=None):
+    body = md.markdown(markdown_text, extensions=["extra", "sane_lists"])
+    if image:
+        img = html.escape(image["image_url"], quote=True)
+        alt = html.escape(image["title"], quote=True)
+        src = html.escape(image["page_url"], quote=True)
+        credit = html.escape(f"{image['title']} — {image['artist']} ({image['license']})")
+        body = f'<figure><img src="{img}" alt="{alt}" style="max-width:100%;height:auto"><figcaption>{credit} · <a href="{src}" rel="nofollow">Source and license</a></figcaption></figure>' + body
+    return body
+
+
+def search_console_rows(creds, site_url, start, end):
+    api = build("searchconsole", "v1", credentials=creds, cache_discovery=False)
+    result = api.searchanalytics().query(
+        siteUrl=site_url,
+        body={"startDate": start.isoformat(), "endDate": end.isoformat(),
+              "dimensions": ["date"], "rowLimit": 30},
+    ).execute()
+    return result.get("rows", [])
+
+
+def ga4_report(creds, property_id, start, end):
+    api = build("analyticsdata", "v1beta", credentials=creds, cache_discovery=False)
+    prop = property_id.strip().replace("properties/", "")
+    return api.properties().runReport(
+        property=f"properties/{prop}",
+        body={"dateRanges": [{"startDate": start.isoformat(), "endDate": end.isoformat()}],
+              "metrics": [{"name": "screenPageViews"}, {"name": "sessions"}, {"name": "activeUsers"}]},
+    ).execute()
+
+
+def adsense_report(creds, start, end):
+    api = build("adsense", "v2", credentials=creds, cache_discovery=False)
+    accounts = api.accounts().list(pageSize=100).execute().get("accounts", [])
+    if not accounts:
+        return [], None
+    report = api.accounts().reports().generate(
+        account=accounts[0]["name"], dateRange="CUSTOM",
+        startDate_year=start.year, startDate_month=start.month, startDate_day=start.day,
+        endDate_year=end.year, endDate_month=end.month, endDate_day=end.day,
+        metrics=["ESTIMATED_EARNINGS", "PAGE_VIEWS", "IMPRESSIONS", "CLICKS"],
+        currencyCode="INR",
+    ).execute()
+    return accounts, report
+
+
 def gate_app():
     auth = secret_section("auth")
     app_cfg = secret_section("app")

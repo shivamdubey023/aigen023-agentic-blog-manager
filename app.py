@@ -159,11 +159,17 @@ def gate_app():
     auth = secret_section("auth")
     app_cfg = secret_section("app")
     required = ["redirect_uri", "cookie_secret", "client_id", "client_secret", "server_metadata_url"]
-    missing = [key for key in required if not auth.get(key)]
+    missing = [f"auth.{key}" for key in required if not auth.get(key)]
+    if not app_cfg.get("allowed_email"):
+        missing.append("app.allowed_email")
     if missing:
         st.title("✍️ Aigen023 Blog Manager")
         st.error("App access is locked until authentication is configured.")
-        st.markdown("In Streamlit **Manage app → Settings → Secrets**, add the [auth] settings and [app] allowed_email shown in the setup instructions.")
+        st.markdown("In Streamlit **Manage app → Settings → Secrets**, paste the complete TOML configuration from the repository README. Google Cloud redirect URI settings alone do not configure Streamlit Secrets.")
+        st.write("**Missing settings detected (values are not shown):**")
+        for item in missing:
+            st.code(item)
+        st.markdown("[Open setup instructions](https://github.com/shivamdubey023/aigen023-agentic-blog-manager#required-streamlit-secrets)")
         st.stop()
     if not st.user.is_logged_in:
         st.title("✍️ Aigen023 Blog Manager")

@@ -1,18 +1,10 @@
-"""Multi-model AI generation engine supporting Gemini, Groq, Cohere, OpenAI, and Claude.
-Uses active verified 2026 model IDs and intelligent multi-model fallback.
-"""
+"""Multi-model AI generation engine supporting Gemini, Groq, Cohere, OpenAI, and Claude."""
 from __future__ import annotations
-import json
-import logging
-import re
-from typing import Any
 import requests
 
 from core.env_config import (
     get_groq_key, get_gemini_key, get_cohere_key, get_openai_key, get_anthropic_key,
 )
-
-logger = logging.getLogger(__name__)
 
 SUPPORTED_PROVIDERS = {
     "groq": {
@@ -42,30 +34,16 @@ SUPPORTED_PROVIDERS = {
     },
 }
 
-HUMANIZED_SYSTEM_PROMPT = """You are a seasoned senior software engineer and technical author writing for NextGen Tech Notes (https://aigen023.blogspot.com/).
-Your tutorials are known for their practical depth, real production examples, and zero-fluff explanations.
+HUMANIZED_SYSTEM_PROMPT = """You are a technical writing assistant for NextGen Tech Notes.
+Write clear, practical, original Markdown that matches the user's topic and audience. Use a
+single H1 followed by useful H2/H3 sections, complete examples where appropriate, prerequisites,
+troubleshooting, and a verification checklist when relevant.
 
-CRITICAL: WRITE IN A 100% NATURAL, HUMANIZED DEVELOPER VOICE TO BYPASS AI DETECTORS & PASS ADSENSE QUALITY REVIEW:
-1. Tone and Burstiness:
-   - Write like a real human engineer. Vary sentence length dramatically: mix short, punchy statements with detailed technical reasoning.
-   - Use natural conversational transitions ("Here is where things get tricky", "If you run this now, it will fail with...", "In production, we learned this the hard way").
-   - NEVER use generic AI buzzwords or filler clichés:
-     * BANNED: "In today's fast-paced digital world", "delve into", "dive deep", "testament to", "it is crucial to remember", "a beacon of", "revolutionizing the landscape", "In conclusion", "To wrap things up".
-2. Practical Code & Error Verification:
-   - Provide fully functional, complete, syntax-valid code snippets with descriptive variable names.
-   - Always include realistic terminal commands, expected outputs, and at least ONE representative failure mode with an actual traceback snippet and its step-by-step fix.
-3. Content Architecture:
-   - One clean H1 title at the top.
-   - Prerequisites (specific Python/framework versions, OS notes).
-   - Architecture & High-Level Workflow breakdown.
-   - Step-by-step production implementation with complete code.
-   - Troubleshooting & Gotchas (real edge cases developers hit in production).
-   - Verification and testing checklist.
-   - Frequently Asked Questions (FAQ) section: 3-4 high-intent developer questions with crisp, direct answers.
-4. Word Count & Depth:
-   - MANDATORY LENGTH: 1,500 to 2,200 words. Never cut sections short or use placeholder comments like "# implement here".
-5. Output format: Pure Markdown only. No conversational intro banter and no outro chit-chat.
-"""
+Do not claim personal experience or tests were performed. Do not invent terminal output, tracebacks,
+version support, statistics, quotations, citations, or URLs. Mark details needing confirmation as
+[VERIFY]. Distinguish illustrative examples from observed results. Do not pad to reach a word count,
+promise search rankings or advertising approval, or write to evade AI-detection systems.
+Return only the article Markdown."""
 
 def resolve_key_for_provider(provider: str, passed_key: str | None = None) -> str:
     """Resolve API key from passed value or .env automatically."""
@@ -86,7 +64,7 @@ def resolve_key_for_provider(provider: str, passed_key: str | None = None) -> st
 
 def generate_technical_article(
     *,
-    provider: str = "groq",
+    provider: str,
     model: str | None = None,
     api_key: str | None = None,
     topic: str,
@@ -97,71 +75,54 @@ def generate_technical_article(
     temperature: float = 0.45,
     max_tokens: int = 8000,
 ) -> str:
-    """
-    Generate or rewrite an article using the chosen LLM provider.
-    Includes automatic intelligent fallback if a model or provider fails.
-    """
+    """Generate an article only with the provider and model explicitly selected."""
     provider = provider.lower().strip()
-    selected_model = model or SUPPORTED_PROVIDERS.get(provider, {}).get("default_model", "openai/gpt-oss-120b")
+    provider_config = SUPPORTED_PROVIDERS.get(provider)
+    if not provider_config:
+        raise ValueError(f"Unsupported AI provider: {provider or '(empty)'}")
+    if not topic.strip():
+        raise ValueError("Choose an article topic before generating.")
+    selected_model = model or provider_config["default_model"]
     resolved_key = resolve_key_for_provider(provider, api_key)
+    if not resolved_key:
+        raise ValueError(f"No API key is configured for {provider}. Configure it or select another provider.")
     system_prompt = custom_system_prompt.strip() or HUMANIZED_SYSTEM_PROMPT
 
-    user_prompt = f"""Write an exhaustive, battle-tested, humanized technical tutorial for NextGen Tech Notes.
+    user_prompt = f"""Write a practical technical article for NextGen Tech Notes.
 Topic: {topic}
 Primary keyword: {primary_keyword or topic}
 Target reader level: {audience}
-Author notes & specific guidance: {notes or 'Provide real-world code, common gotchas, and troubleshooting steps.'}
+Author notes & specific guidance: {notes or 'Provide relevant examples and troubleshooting guidance.'}
 
-Remember:
-- Write in a natural, opinionated human developer tone (avoid AI filler).
-- Include standard Markdown H1, H2, and H3 headers.
-- Include an FAQ section at the end with 3-4 real developer questions.
-- Output pure Markdown only.
+Use Markdown headings and examples where useful. Never imply that illustrative output or code
+was actually executed. Do not invent source URLs, citations, test results, or personal experience.
+Mark uncertain technical details [VERIFY]. Output Markdown only.
 """
 
-    errors = []
+    provider_calls = {
+        "groq": _call_groq,
+        "gemini": _call_gemini,
+        "cohere": _call_cohere,
+        "openai": _call_openai,
+        "anthropic": _call_anthropic,
+    }
+    draft = provider_calls[provider](
+        resolved_key, selected_model, system_prompt, user_prompt, temperature, max_tokens
+    )
+    if not draft.strip():
+        raise RuntimeError(f"{provider} returned an empty article. Review the request and retry.")
+    return draft.strip()
 
-    # 1. Primary Attempt
-    if resolved_key:
-        try:
-            if provider == "groq":
-                return _call_groq(resolved_key, selected_model, system_prompt, user_prompt, temperature, max_tokens)
-            elif provider == "gemini":
-                return _call_gemini(resolved_key, selected_model, system_prompt, user_prompt, temperature, max_tokens)
-            elif provider == "cohere":
-                return _call_cohere(resolved_key, selected_model, system_prompt, user_prompt, temperature, max_tokens)
-            elif provider == "openai":
-                return _call_openai(resolved_key, selected_model, system_prompt, user_prompt, temperature, max_tokens)
-            elif provider == "anthropic":
-                return _call_anthropic(resolved_key, selected_model, system_prompt, user_prompt, temperature, max_tokens)
-        except Exception as exc:
-            errors.append(f"{provider} ({selected_model}): {exc}")
-
-    # 2. Automatic Fallback: Try Gemini 3.8 Flash
-    gem_key = get_gemini_key()
-    if gem_key and provider != "gemini":
-        try:
-            return _call_gemini(gem_key, "gemini-3.8-flash", system_prompt, user_prompt, temperature, max_tokens)
-        except Exception as exc:
-            errors.append(f"Fallback Gemini: {exc}")
-
-    # 3. Automatic Fallback: Try Groq openai/gpt-oss-120b
-    groq_k = get_groq_key()
-    if groq_k and provider != "groq":
-        try:
-            return _call_groq(groq_k, "openai/gpt-oss-120b", system_prompt, user_prompt, temperature, max_tokens)
-        except Exception as exc:
-            errors.append(f"Fallback Groq: {exc}")
-
-    # 4. Automatic Fallback: Try Cohere command-r-08-2024
-    co_k = get_cohere_key()
-    if co_k and provider != "cohere":
-        try:
-            return _call_cohere(co_k, "command-r-08-2024", system_prompt, user_prompt, temperature, max_tokens)
-        except Exception as exc:
-            errors.append(f"Fallback Cohere: {exc}")
-
-    raise RuntimeError(f"All AI generation attempts failed: {' | '.join(errors)}")
+def _raise_provider_error(provider: str, status_code: int) -> None:
+    if status_code == 401 or status_code == 403:
+        detail = "check the selected provider's API key and permissions"
+    elif status_code == 429:
+        detail = "the provider reported a rate limit or quota limit; retry later or choose another provider"
+    elif status_code >= 500:
+        detail = "the provider is temporarily unavailable; retry later"
+    else:
+        detail = "check the selected model and request settings"
+    raise RuntimeError(f"{provider} API request failed (HTTP {status_code}); {detail}.")
 
 def _call_groq(api_key: str, model: str, system_prompt: str, user_prompt: str, temperature: float, max_tokens: int) -> str:
     url = "https://api.groq.com/openai/v1/chat/completions"
@@ -180,7 +141,7 @@ def _call_groq(api_key: str, model: str, system_prompt: str, user_prompt: str, t
     }
     resp = requests.post(url, headers=headers, json=payload, timeout=90)
     if not resp.ok:
-        raise RuntimeError(f"Groq API error ({resp.status_code}): {resp.text[:400]}")
+        _raise_provider_error("Groq", resp.status_code)
     data = resp.json()
     choices = data.get("choices", [])
     if not choices:
@@ -203,11 +164,11 @@ def _call_gemini(api_key: str, model: str, system_prompt: str, user_prompt: str,
     }
     resp = requests.post(url, params={"key": api_key}, json=payload, timeout=120)
     if not resp.ok:
-        raise RuntimeError(f"Gemini API error ({resp.status_code}): {resp.text[:400]}")
+        _raise_provider_error("Gemini", resp.status_code)
     data = resp.json()
     candidates = data.get("candidates", [])
     if not candidates:
-        raise RuntimeError(f"Gemini returned no candidates: {data}")
+        raise RuntimeError("Gemini returned no candidates. Check the model and request settings.")
     parts = candidates[0].get("content", {}).get("parts", [])
     if not parts:
         raise RuntimeError("Gemini returned empty parts")
@@ -230,7 +191,7 @@ def _call_cohere(api_key: str, model: str, system_prompt: str, user_prompt: str,
     }
     resp = requests.post(url, headers=headers, json=payload, timeout=90)
     if not resp.ok:
-        raise RuntimeError(f"Cohere API error ({resp.status_code}): {resp.text[:400]}")
+        _raise_provider_error("Cohere", resp.status_code)
     data = resp.json()
     message = data.get("message", {})
     content = message.get("content", [])
@@ -255,7 +216,7 @@ def _call_openai(api_key: str, model: str, system_prompt: str, user_prompt: str,
     }
     resp = requests.post(url, headers=headers, json=payload, timeout=90)
     if not resp.ok:
-        raise RuntimeError(f"OpenAI API error ({resp.status_code}): {resp.text[:400]}")
+        _raise_provider_error("OpenAI", resp.status_code)
     data = resp.json()
     choices = data.get("choices", [])
     if not choices:
@@ -280,7 +241,7 @@ def _call_anthropic(api_key: str, model: str, system_prompt: str, user_prompt: s
     }
     resp = requests.post(url, headers=headers, json=payload, timeout=90)
     if not resp.ok:
-        raise RuntimeError(f"Anthropic API error ({resp.status_code}): {resp.text[:400]}")
+        _raise_provider_error("Anthropic", resp.status_code)
     data = resp.json()
     content = data.get("content", [])
     if not content:

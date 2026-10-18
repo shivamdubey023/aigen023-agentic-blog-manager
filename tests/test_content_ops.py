@@ -1,10 +1,13 @@
 import unittest
 import os
+import requests
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from core import database as db
-from property_a_blog.blogger_client import finish_oauth, get_redirect_uri
+from core.stock_images import provider_status, search_stock_images
+from property_a_blog.blogger_client import finish_oauth, get_redirect_uri, update_live_post_navigation
+from property_a_blog.navigation import navigation_content, order_live_posts
 from property_a_blog.seo_optimizer import affiliate_box, content_quality_checks, parse_headings, render_article
 
 class SeoTests(unittest.TestCase):
@@ -45,11 +48,155 @@ class DatabaseTests(unittest.TestCase):
                 saved = db.get_article(article_id)
                 self.assertEqual(saved["title"], "Python guide")
                 self.assertEqual(saved["status"], "DRAFT")
+                with self.assertRaisesRegex(ValueError, "linked to a confirmed Blogger draft"):
+                    db.delete_article(article_id, require_blogger_post=True)
+                db.save_article(topic="Python", primary_keyword="python", title="Python guide",
+                    markdown_body="# Python", article_id=article_id, blogger_post_id="post-1")
+                db.save_article(topic="Python edited", primary_keyword="python", title="Python guide",
+                    markdown_body="# Python edited", article_id=article_id)
+                self.assertEqual(db.get_article(article_id)["blogger_post_id"], "post-1")
+                self.assertTrue(db.delete_article(article_id, require_blogger_post=True))
+                self.assertIsNone(db.get_article(article_id))
                 db.store_oauth_state("test-state", "test-verifier")
                 self.assertEqual(db.consume_oauth_state("test-state"), "test-verifier")
                 self.assertIsNone(db.consume_oauth_state("test-state"))
         finally:
             db.DB_PATH = original
+
+class StockImageTests(unittest.TestCase):
+    @patch("core.stock_images.get_pexels_key", return_value="server-key")
+    @patch("core.stock_images.requests.get")
+    def test_pexels_results_are_normalized_and_use_only_provider_image_hosts(self, get, _key):
+        response = Mock()
+        response.status_code = 200
+        response.ok = True
+        response.json.return_value = {"photos": [
+            {
+                "src": {
+                    "large": "https://images.pexels.com/photos/1/large.jpg",
+                    "medium": "https://images.pexels.com/photos/1/medium.jpg",
+                },
+                "alt": "A developer",
+                "photographer": "Example",
+                "photographer_url": "https://www.pexels.com/@example",
+                "url": "https://www.pexels.com/photo/1",
+            },
+            {
+                "src": {"large": "https://attacker.example/image.jpg"},
+                "url": "https://www.pexels.com/photo/2",
+                "photographer_url": "https://www.pexels.com/@example",
+            },
+        ]}
+        get.return_value = response
+
+        images = search_stock_images("python", "pexels")
+
+        self.assertEqual(len(images), 1)
+        self.assertEqual(images[0]["photographer"], "Example")
+        self.assertEqual(get.call_args.kwargs["headers"]["Authorization"], "server-key")
+
+    @patch("core.stock_images.get_unsplash_key", return_value="")
+    @patch("core.stock_images.requests.get")
+    def test_missing_unsplash_key_fails_without_request(self, get, _key):
+        with self.assertRaisesRegex(ValueError, "UNSPLASH_ACCESS_KEY"):
+            search_stock_images("python", "unsplash")
+        get.assert_not_called()
+
+    @patch("core.stock_images.get_pexels_key", return_value="server-key")
+    @patch("core.stock_images.requests.get")
+    def test_pexels_rate_limit_is_reported_without_fallback(self, get, _key):
+        response = Mock(status_code=429, ok=False)
+        get.return_value = response
+        with self.assertRaisesRegex(RuntimeError, "quota or rate limit"):
+            search_stock_images("python", "pexels")
+
+    @patch("core.stock_images.get_pexels_key", return_value="server-key")
+    @patch("core.stock_images.requests.get", side_effect=requests.Timeout)
+    def test_stock_image_timeout_is_actionable(self, _get, _key):
+        with self.assertRaisesRegex(RuntimeError, "timed out"):
+            search_stock_images("python", "pexels")
+
+    @patch("core.stock_images.get_pexels_key", return_value="server-key")
+    @patch("core.stock_images.requests.get")
+    def test_malformed_provider_response_is_reported(self, get, _key):
+        response = Mock(status_code=200, ok=True)
+        response.json.side_effect = ValueError("not JSON")
+        get.return_value = response
+        with self.assertRaisesRegex(RuntimeError, "invalid response"):
+            search_stock_images("python", "pexels")
+
+    @patch("core.stock_images.get_unsplash_key", return_value="unsplash-secret")
+    @patch("core.stock_images.get_pexels_key", return_value="")
+    def test_provider_status_only_reports_presence(self, _pexels, _unsplash):
+        self.assertEqual(provider_status(), {"pexels": False, "unsplash": True})
+
+class NavigationTests(unittest.TestCase):
+    def test_live_posts_are_ordered_by_published_time_and_drafts_are_excluded(self):
+        posts = [
+            {"id": "later", "status": "LIVE", "published": "2025-02-02T00:00:00Z"},
+            {"id": "draft", "status": "DRAFT", "published": "2024-01-01T00:00:00Z"},
+            {"id": "earlier", "status": "LIVE", "published": "2025-02-01T00:00:00Z"},
+        ]
+        ordered, skipped = order_live_posts(posts)
+        self.assertEqual([post["id"] for post in ordered], ["earlier", "later"])
+        self.assertEqual(skipped, [])
+
+    def test_navigation_replacement_is_idempotent_and_preserves_article_body(self):
+        posts = [
+            {"id": "1", "title": "First <Guide>", "url": "https://blog.example/first"},
+            {"id": "2", "title": "Second", "url": "https://blog.example/second"},
+        ]
+        body = "<p>Article body</p>"
+        once = navigation_content(body, posts[0], posts[1])
+        twice = navigation_content(once, posts[0], posts[1])
+        self.assertEqual(once, twice)
+        self.assertIn("<p>Article body</p>", twice)
+        self.assertIn('rel="prev"', twice)
+        self.assertIn('rel="next"', twice)
+        self.assertIn("First &lt;Guide&gt;", twice)
+
+class BloggerNavigationUpdateTests(unittest.TestCase):
+    @patch("property_a_blog.blogger_client.blogger_service")
+    def test_live_post_update_requires_confirmation_and_preserves_other_fields(self, service_factory):
+        service = Mock()
+        service_factory.return_value = service
+        service.posts.return_value.get.return_value.execute.return_value = {
+            "id": "post-1",
+            "status": "LIVE",
+            "title": "Existing title",
+            "content": "<p>Before</p>",
+        }
+        service.posts.return_value.update.return_value.execute.return_value = {"id": "post-1"}
+
+        with self.assertRaises(PermissionError):
+            update_live_post_navigation(None, "blog-1", "post-1", "<p>After</p>")
+        service_factory.assert_not_called()
+
+        update_live_post_navigation(
+            None,
+            "blog-1",
+            "post-1",
+            "<p>After</p>",
+            explicit_confirmation=True,
+        )
+        body = service.posts.return_value.update.call_args.kwargs["body"]
+        self.assertEqual(body["title"], "Existing title")
+        self.assertEqual(body["content"], "<p>After</p>")
+
+    @patch("property_a_blog.blogger_client.blogger_service")
+    def test_live_update_refuses_to_change_draft(self, service_factory):
+        service = Mock()
+        service_factory.return_value = service
+        service.posts.return_value.get.return_value.execute.return_value = {"status": "DRAFT"}
+        with self.assertRaisesRegex(PermissionError, "not LIVE"):
+            update_live_post_navigation(
+                None,
+                "blog-1",
+                "post-1",
+                "<p>Navigation</p>",
+                explicit_confirmation=True,
+            )
+        service.posts.return_value.update.assert_not_called()
 
 class OAuthTests(unittest.TestCase):
     def test_redirect_uri_can_be_configured_for_local_development(self):

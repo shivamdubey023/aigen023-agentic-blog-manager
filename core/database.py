@@ -113,10 +113,12 @@ def save_article(*, topic: str, primary_keyword: str, title: str, markdown_body:
     with connection() as conn:
         if article_id is not None:
             cur = conn.execute("""UPDATE articles SET topic=?,primary_keyword=?,title=?,markdown_body=?,
-              rendered_html=?,schema_json=?,status=?,blogger_post_id=?,blogger_blog_id=?,updated_at=?,
+              rendered_html=?,schema_json=?,status=?,
+              blogger_post_id=CASE WHEN ?='' THEN blogger_post_id ELSE ? END,
+              blogger_blog_id=CASE WHEN ?='' THEN blogger_blog_id ELSE ? END,updated_at=?,
               published_at=CASE WHEN ?='PUBLISHED' AND published_at='' THEN ? ELSE published_at END WHERE id=?""",
-              (topic,primary_keyword,title,markdown_body,rendered_html,schema_text,status,blogger_post_id,
-               blogger_blog_id,now,status,now,article_id))
+              (topic,primary_keyword,title,markdown_body,rendered_html,schema_text,status,
+               blogger_post_id,blogger_post_id,blogger_blog_id,blogger_blog_id,now,status,now,article_id))
             if cur.rowcount == 0: raise ValueError(f"Article {article_id} does not exist")
             return article_id
         cur = conn.execute("""INSERT INTO articles(topic,primary_keyword,title,markdown_body,rendered_html,
@@ -134,6 +136,19 @@ def list_articles(limit: int = 500) -> list[dict[str, Any]]:
     with connection() as conn:
         rows = conn.execute("SELECT * FROM articles ORDER BY updated_at DESC LIMIT ?", (max(1,min(limit,2000)),)).fetchall()
     return [dict(r) for r in rows]
+
+def delete_article(article_id: int, *, require_blogger_post: bool = False) -> bool:
+    with connection() as conn:
+        row = conn.execute(
+            "SELECT blogger_post_id FROM articles WHERE id=?",
+            (article_id,),
+        ).fetchone()
+        if row is None:
+            return False
+        if require_blogger_post and not row["blogger_post_id"]:
+            raise ValueError("Only an article linked to a confirmed Blogger draft can be deleted this way.")
+        conn.execute("DELETE FROM articles WHERE id=?", (article_id,))
+        return True
 
 def set_article_status(article_id: int, status: str) -> None:
     if status not in {"QUEUED","DRAFT","PAUSED","PUBLISHED"}: raise ValueError(f"Unsupported status: {status}")

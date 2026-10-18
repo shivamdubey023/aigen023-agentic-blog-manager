@@ -57,6 +57,12 @@ def get_openai_key() -> str:
 def get_anthropic_key() -> str:
     return get_env("ANTHROPIC_API_KEY") or get_env("ANTHROPIC") or get_env("anthropic")
 
+def get_pexels_key() -> str:
+    return get_env("PEXELS_API_KEY")
+
+def get_unsplash_key() -> str:
+    return get_env("UNSPLASH_ACCESS_KEY")
+
 def get_google_client_id() -> str:
     return get_env("GOOGLE_CLIENT_ID") or get_env("client_id")
 

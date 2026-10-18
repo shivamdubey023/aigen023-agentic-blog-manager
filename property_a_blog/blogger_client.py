@@ -161,6 +161,21 @@ def update_existing_draft(creds: Credentials, blog_id: str, post_id: str, title:
         return service.posts().update(blogId=blog_id,postId=post_id,body=existing).execute()
     except HttpError as exc: raise RuntimeError(f"Blogger draft update failed ({exc.resp.status}): {exc}") from exc
 
+def update_live_post_navigation(creds: Credentials, blog_id: str, post_id: str, rendered_html: str,
+                                *, explicit_confirmation: bool=False) -> dict[str,Any]:
+    """Update only the content of a confirmed LIVE post for navigation synchronization."""
+    if not explicit_confirmation:
+        raise PermissionError("Explicit confirmation is required to update live post navigation.")
+    service = blogger_service(creds)
+    try:
+        existing = service.posts().get(blogId=blog_id, postId=post_id).execute()
+        if existing.get("status") != "LIVE":
+            raise PermissionError("Refusing to update navigation on a post that is not LIVE.")
+        existing["content"] = rendered_html
+        return service.posts().update(blogId=blog_id, postId=post_id, body=existing).execute()
+    except HttpError as exc:
+        raise RuntimeError(f"Blogger live navigation update failed ({exc.resp.status}).") from exc
+
 def search_console_report(creds: Credentials, start: date, end: date, site_url: str=BLOG_URL,
                           dimensions: list[str]|None=None, row_limit: int=250) -> dict[str,Any]:
     try:

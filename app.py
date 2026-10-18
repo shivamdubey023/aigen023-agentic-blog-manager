@@ -5,18 +5,34 @@ from datetime import datetime
 from pathlib import Path
 
 import streamlit as st
+import markdown as md
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import Flow
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
 APP_DIR = Path(__file__).parent
 DATA_DIR = APP_DIR / "data"
 DRAFT_DIR = DATA_DIR / "drafts"
-for folder in (DATA_DIR, DRAFT_DIR):
-    folder.mkdir(parents=True, exist_ok=True)
+DRAFT_DIR.mkdir(parents=True, exist_ok=True)
+BLOGGER_SCOPE = "https://www.googleapis.com/auth/blogger"
+APP_URL = "https://aigen023-blog-manager.streamlit.app/"
+BLOGGER_REDIRECT_URI = APP_URL
 
 st.set_page_config(page_title="Aigen023 Blog Manager", page_icon="✍️", layout="wide")
+
+
+def secret_section(name):
+    try:
+        return dict(st.secrets[name])
+    except Exception:
+        return {}
+
 
 def slugify(value):
     value = re.sub(r"[^a-zA-Z0-9\s-]", "", value.lower())
     return re.sub(r"[\s-]+", "-", value).strip("-")[:80] or "blog-post"
+
 
 def load_drafts():
     drafts = []
@@ -27,143 +43,303 @@ def load_drafts():
             continue
     return drafts
 
-def make_cover_svg(title, subtitle):
-    title = html.escape(title[:65])
-    subtitle = html.escape(subtitle[:100])
-    return f'''<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
-<defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#101a35"/><stop offset="1" stop-color="#126782"/></linearGradient></defs>
-<rect width="1200" height="630" rx="24" fill="url(#bg)"/>
-<circle cx="1030" cy="110" r="190" fill="#48d6c7" opacity=".12"/>
-<circle cx="110" cy="590" r="220" fill="#8da7ff" opacity=".13"/>
-<text x="75" y="100" fill="#72e7dc" font-size="25" font-family="Arial">AIGEN023 · NEXTGEN TECH NOTES</text>
-<foreignObject x="75" y="155" width="1050" height="300"><div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Arial;color:white;font-size:52px;font-weight:bold;line-height:1.15">{title}</div></foreignObject>
-<foreignObject x="78" y="485" width="1040" height="80"><div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Arial;color:#d6e8f3;font-size:25px">{subtitle}</div></foreignObject>
-</svg>'''
 
-def save_draft(title, topic, meta, keywords, article, references, notes):
-    draft_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+def save_local_draft(title, content, blog_id="", source_post_id=""):
+    draft_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     draft = {
-        "id": draft_id, "created_at": datetime.now().isoformat(timespec="seconds"),
-        "title": title.strip(), "topic": topic.strip(), "meta_description": meta.strip(),
-        "keywords": [x.strip() for x in keywords.split(",") if x.strip()],
-        "article_markdown": article.strip(),
-        "references": [x.strip() for x in references.splitlines() if x.strip()],
-        "research_notes": notes.strip(), "status": "Draft — human review required",
-        "checks": {"examples_tested": False, "references_verified": False, "proofread": False}
+        "id": draft_id,
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "title": title.strip(),
+        "content": content,
+        "blog_id": blog_id,
+        "source_post_id": source_post_id,
+        "status": "Local draft — not published",
     }
     (DRAFT_DIR / f"{draft_id}.json").write_text(
         json.dumps(draft, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     return draft
 
+
+def get_blogger_credentials():
+    token_data = st.session_state.get("blogger_token")
+    if not token_data:
+        return None
+    try:
+        return Credentials.from_authorized_user_info(token_data, [BLOGGER_SCOPE])
+    except Exception:
+        st.session_state.pop("blogger_token", None)
+        return None
+
+
+def blogger_service():
+    creds = get_blogger_credentials()
+    if not creds or not creds.valid:
+        return None
+    return build("blogger", "v3", credentials=creds, cache_discovery=False)
+
+
+def connect_blogger():
+    google = secret_section("google")
+    if not google.get("client_id") or not google.get("client_secret"):
+        st.error("Missing [google] client_id/client_secret in Streamlit Secrets.")
+        return
+    flow = Flow.from_client_config(
+        {
+            "web": {
+                "client_id": google["client_id"],
+                "client_secret": google["client_secret"],
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+                "redirect_uris": [BLOGGER_REDIRECT_URI],
+            }
+        },
+        scopes=[BLOGGER_SCOPE],
+        redirect_uri=BLOGGER_REDIRECT_URI,
+    )
+    auth_url, state = flow.authorization_url(
+        access_type="offline",
+        include_granted_scopes="true",
+        prompt="consent",
+    )
+    st.session_state["blogger_oauth_state"] = state
+    st.session_state["blogger_oauth_flow"] = {
+        "state": state,
+        "client_id": google["client_id"],
+        "client_secret": google["client_secret"],
+    }
+    st.link_button("Continue to Google authorization", auth_url)
+
+
+def handle_blogger_callback():
+    code = st.query_params.get("code")
+    state = st.query_params.get("state")
+    if not code:
+        return
+    oauth_state = st.session_state.get("blogger_oauth_state")
+    if not oauth_state or not state or state != oauth_state:
+        st.error("OAuth state did not match. For safety, restart the Blogger connection.")
+        st.query_params.clear()
+        return
+    cfg = st.session_state.get("blogger_oauth_flow", {})
+    flow = Flow.from_client_config(
+        {
+            "web": {
+                "client_id": cfg.get("client_id", ""),
+                "client_secret": cfg.get("client_secret", ""),
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+                "redirect_uris": [BLOGGER_REDIRECT_URI],
+            }
+        },
+        scopes=[BLOGGER_SCOPE],
+        state=oauth_state,
+        redirect_uri=BLOGGER_REDIRECT_URI,
+    )
+    try:
+        flow.fetch_token(code=code)
+        creds = flow.credentials
+        st.session_state["blogger_token"] = json.loads(creds.to_json())
+        st.session_state.pop("blogger_oauth_state", None)
+        st.session_state.pop("blogger_oauth_flow", None)
+        st.query_params.clear()
+        st.success("Blogger connected for this browser session.")
+        st.rerun()
+    except Exception as exc:
+        st.query_params.clear()
+        st.error(f"Google authorization failed: {exc}")
+
+
+def gate_app():
+    auth = secret_section("auth")
+    app_cfg = secret_section("app")
+    required = ["redirect_uri", "cookie_secret", "client_id", "client_secret", "server_metadata_url"]
+    missing = [key for key in required if not auth.get(key)]
+    if missing:
+        st.title("✍️ Aigen023 Blog Manager")
+        st.error("App access is locked until authentication is configured.")
+        st.markdown("In Streamlit **Manage app → Settings → Secrets**, add the [auth] settings and [app] allowed_email shown in the setup instructions.")
+        st.stop()
+    if not st.user.is_logged_in:
+        st.title("✍️ Aigen023 Blog Manager")
+        st.write("Private owner dashboard. Sign in with your Google account to continue.")
+        st.button("Sign in with Google", on_click=st.login, type="primary")
+        st.stop()
+    signed_email = str(getattr(st.user, "email", "") or "").lower()
+    allowed_email = str(app_cfg.get("allowed_email", "")).strip().lower()
+    if not allowed_email or signed_email != allowed_email:
+        st.error("This Google account is not authorized to use this dashboard.")
+        st.button("Sign out", on_click=st.logout)
+        st.stop()
+    return signed_email
+
+
+handle_blogger_callback()
+owner_email = gate_app()
+
 st.title("✍️ Aigen023 Agentic Blog Manager")
-st.caption("Zero-budget starter for NextGen Tech Notes · Blogger · SEO · AdSense · Affiliate planning")
-st.warning("Starter build: article drafts and checklists work. Live Blogger, Search Console, Analytics and AdSense data are NOT connected yet. Never treat estimated income as guaranteed.")
-
+st.caption("NextGen Tech Notes · Blogger · SEO · AdSense · Affiliate planning")
 with st.sidebar:
-    st.header("Your blog")
-    blog_url = st.text_input("Blogger URL", "https://aigen023.blogspot.com/")
-    st.markdown("**Connection status**")
-    st.write("Blogger API: Not connected")
-    st.write("Search Console: Not connected")
-    st.write("GA4 Analytics: Not connected")
-    st.write("AdSense API: Not connected")
-    st.caption("No API keys or passwords should be committed to GitHub.")
+    st.success(f"Signed in: {owner_email}")
+    if st.button("Sign out"):
+        st.logout()
+    st.divider()
+    st.write("**Blogger connection**")
+    if get_blogger_credentials():
+        st.success("Connected for this browser session")
+        if st.button("Disconnect Blogger"):
+            st.session_state.pop("blogger_token", None)
+            st.rerun()
+    else:
+        st.info("Not connected")
+    st.caption("Credentials and tokens are not written to source files.")
 
-tab_dashboard, tab_create, tab_review, tab_seo, tab_affiliate, tab_connect = st.tabs(
-    ["Dashboard", "Create article", "Review drafts", "SEO & AdSense", "Affiliate planner", "Connect services"]
+try:
+    handle_blogger_callback()
+except Exception:
+    pass
+
+service = blogger_service()
+blogs = []
+blog_error = None
+if service:
+    try:
+        blogs = service.blogs().listByUser(userId="self").execute().get("items", [])
+    except HttpError as exc:
+        blog_error = str(exc)
+
+tab_dashboard, tab_posts, tab_editor, tab_seo, tab_affiliate, tab_setup = st.tabs(
+    ["Dashboard", "Blogger posts", "Create / revise draft", "SEO & AdSense", "Affiliate planner", "Setup"]
 )
 
 with tab_dashboard:
     drafts = load_drafts()
-    a, b, c, d = st.columns(4)
-    a.metric("Saved drafts", len(drafts))
-    b.metric("Published posts", "Not connected")
-    c.metric("Search clicks", "Not connected")
-    d.metric("AdSense earnings", "Not connected")
-    st.info("Pageviews, Search Console clicks and AdSense earnings are different metrics. Connect each official service before displaying live numbers.")
-    st.subheader("Recent drafts")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Local drafts", len(drafts))
+    c2.metric("Blogger connection", "Connected" if service else "Not connected")
+    c3.metric("Blogs found", len(blogs) if service else "—")
+    c4.metric("Live analytics", "Not connected")
+    st.info("Live views, Search Console clicks, and AdSense earnings are not connected yet. Do not interpret estimates as actual earnings.")
+    st.subheader("Recent local drafts")
     if drafts:
-        for item in drafts[:8]:
-            st.write(f"**{item.get('title', 'Untitled')}** · {item.get('created_at', '')} · {item.get('status', '')}")
+        for draft in drafts[:8]:
+            st.write(f"**{draft.get('title', 'Untitled')}** · {draft.get('created_at', '')} · {draft.get('status', '')}")
     else:
-        st.write("No drafts yet. Open Create article to start.")
-    st.subheader("Recommended workflow")
-    st.markdown("1. Choose a real reader problem.\n2. Add firsthand tests, examples and verified references.\n3. Proofread and check links.\n4. Publish manually in Blogger.\n5. Use Search Console to monitor indexing and clicks.")
+        st.write("No local drafts yet.")
+    if blog_error:
+        st.error(f"Blogger API error: {blog_error}")
 
-with tab_create:
-    st.subheader("Create an article draft")
-    st.write("Write or paste your draft here. This starter does not yet generate factual research with AI.")
-    with st.form("new_draft"):
-        topic = st.text_input("Topic", placeholder="e.g. Fix a Django GraphQL error")
-        title = st.text_input("SEO title")
-        meta = st.text_area("Meta description", max_chars=160)
-        keywords = st.text_input("Keywords, comma-separated")
-        notes = st.text_area("Research notes / firsthand testing", height=100)
-        article = st.text_area("Article in Markdown", height=340, placeholder="# Introduction\n## Problem\n## Step-by-step fix\n## Tested example\n## Common mistakes\n## References")
-        references = st.text_area("References — one URL per line", height=100)
-        submit = st.form_submit_button("Save draft", type="primary")
-    if submit:
-        if not topic.strip() or not title.strip() or len(article.strip()) < 250:
-            st.error("Add a topic, title and substantive article of at least 250 characters.")
+with tab_posts:
+    st.subheader("Your Blogger posts")
+    if not service:
+        st.info("Connect Blogger in the Setup tab first.")
+    elif blog_error:
+        st.error(blog_error)
+    elif not blogs:
+        st.warning("No Blogger blogs were returned for the authorized Google account.")
+    else:
+        blog_options = {f"{b.get('name', 'Untitled blog')} · {b.get('url', '')}": b for b in blogs}
+        chosen_blog_label = st.selectbox("Choose a blog", list(blog_options))
+        chosen_blog = blog_options[chosen_blog_label]
+        try:
+            post_response = service.posts().list(
+                blogId=chosen_blog["id"], fetchBodies=True, maxResults=30, status=["LIVE", "DRAFT"]
+            ).execute()
+            posts = post_response.get("items", [])
+            st.caption(f"Showing up to 30 posts from {chosen_blog.get('name', 'your blog')}.")
+            if not posts:
+                st.info("No posts returned.")
+            for post in posts:
+                status = "Draft" if post.get("status") == "DRAFT" else "Published"
+                with st.expander(f"{post.get('title', 'Untitled')} · {status}"):
+                    st.caption(f"Updated: {post.get('updated', 'unknown')} · Post ID: {post.get('id', '')}")
+                    st.markdown(post.get("content", ""), unsafe_allow_html=True)
+                    st.download_button(
+                        "Download post HTML",
+                        post.get("content", ""),
+                        file_name=f"{slugify(post.get('title', 'post'))}.html",
+                        mime="text/html",
+                        key=f"download_{post.get('id')}",
+                    )
+                    if st.button("Load into revision editor", key=f"revise_{post.get('id')}"):
+                        st.session_state["revision_title"] = f"Updated: {post.get('title', '')}"
+                        st.session_state["revision_content"] = post.get("content", "")
+                        st.session_state["revision_blog_id"] = chosen_blog["id"]
+                        st.session_state["revision_source_post_id"] = post.get("id", "")
+                        st.session_state["revision_blog_name"] = chosen_blog.get("name", "")
+                        st.toast("Loaded into the draft editor. Original post remains unchanged.")
+        except HttpError as exc:
+            st.error(f"Could not load posts: {exc}")
+
+with tab_editor:
+    st.subheader("Create a new Blogger draft or prepare a revision")
+    if not service:
+        st.caption("You can create local drafts now; connect Blogger to save a draft directly to Blogger.")
+    initial_title = st.session_state.get("revision_title", "")
+    initial_content = st.session_state.get("revision_content", "")
+    with st.form("draft_form", clear_on_submit=False):
+        title = st.text_input("Post title", value=initial_title, key="editor_title")
+        content = st.text_area(
+            "Post content (HTML accepted; Markdown is converted)",
+            value=initial_content,
+            height=360,
+            key="editor_content",
+        )
+        save_local = st.form_submit_button("Save local draft")
+        publish_blogger_draft = st.form_submit_button("Save as Blogger draft", type="primary", disabled=not bool(service and blogs))
+    if save_local:
+        if not title.strip() or len(content.strip()) < 20:
+            st.error("Enter a title and substantive content.")
         else:
-            draft = save_draft(title, topic, meta, keywords, article, references, notes)
-            st.success(f"Saved draft {draft['id']}. Review it before publishing.")
-            cover = make_cover_svg(title, "Practical guide · Examples · Troubleshooting")
-            st.download_button("Download cover image (SVG)", cover, file_name=f"{slugify(title)}.svg", mime="image/svg+xml")
-            st.download_button("Download Markdown article", article, file_name=f"{slugify(title)}.md", mime="text/markdown")
-            st.download_button("Download draft metadata", json.dumps(draft, ensure_ascii=False, indent=2), file_name=f"{draft['id']}.json", mime="application/json")
-
-with tab_review:
-    st.subheader("Review and improve drafts")
-    drafts = load_drafts()
-    if not drafts:
-        st.info("Create your first draft before using this section.")
-    else:
-        options = {f"{x['id']} · {x['title']}": x for x in drafts}
-        selected = st.selectbox("Choose a draft", list(options))
-        draft = options[selected]
-        st.markdown(f"### {draft['title']}")
-        st.caption(f"Created {draft['created_at']} · {draft['status']}")
-        st.write("**Meta description:**", draft.get("meta_description") or "Not added")
-        st.write("**Keywords:**", ", ".join(draft.get("keywords", [])) or "Not added")
-        st.markdown(draft.get("article_markdown", ""))
-        st.download_button("Download selected article", draft.get("article_markdown", ""), file_name=f"{slugify(draft['title'])}.md", mime="text/markdown")
-        st.markdown("**Before publishing**")
-        st.checkbox("I added original examples or firsthand experience", key=f"ex_{draft['id']}")
-        st.checkbox("I verified every reference and factual claim", key=f"ref_{draft['id']}")
-        st.checkbox("I proofread the article and checked links", key=f"proof_{draft['id']}")
+            d = save_local_draft(title, content)
+            st.success(f"Saved local draft {d['id']}.")
+    if publish_blogger_draft:
+        if not title.strip() or len(content.strip()) < 20:
+            st.error("Enter a title and substantive content.")
+        else:
+            blog_choices = {f"{b.get('name', 'Untitled blog')} · {b.get('url', '')}": b for b in blogs}
+            blog_label = st.selectbox("Select target blog for draft", list(blog_choices), key="target_blog")
+            if st.button("Confirm create Blogger draft", key="confirm_blogger_draft"):
+                try:
+                    html_content = content if re.search(r"<[a-zA-Z][^>]*>", content) else md.markdown(content)
+                    body = {"kind": "blogger#post", "title": title.strip(), "content": html_content}
+                    created = service.posts().insert(
+                        blogId=blog_choices[blog_label]["id"], body=body, isDraft=True
+                    ).execute()
+                    st.success(f"Blogger draft created: {created.get('title', title)}")
+                    if created.get("url"):
+                        st.link_button("Open draft post", created["url"])
+                except HttpError as exc:
+                    st.error(f"Could not create Blogger draft: {exc}")
 
 with tab_seo:
     st.subheader("SEO and AdSense quality checklist")
     checks = [
-        st.checkbox("The article solves a specific reader problem", key="seo1"),
-        st.checkbox("It includes original examples, tests or useful analysis", key="seo2"),
-        st.checkbox("Every citation is real, relevant and checked", key="seo3"),
-        st.checkbox("The content is not copied or lightly rewritten", key="seo4"),
-        st.checkbox("Navigation, About, Contact and Privacy pages are in place", key="seo5"),
-        st.checkbox("Mobile layout, broken links and spelling are checked", key="seo6"),
+        st.checkbox("Article solves a specific reader problem", key="seo1"),
+        st.checkbox("Includes original examples, tests, or useful analysis", key="seo2"),
+        st.checkbox("Every citation is real, relevant, and verified", key="seo3"),
+        st.checkbox("Content is not copied or lightly rewritten", key="seo4"),
+        st.checkbox("About, Contact, Privacy, and navigation pages are in place", key="seo5"),
+        st.checkbox("Mobile layout, broken links, and spelling are checked", key="seo6"),
         st.checkbox("Relevant internal links and descriptive image alt text are added", key="seo7"),
     ]
     score = sum(checks)
     st.progress(score / len(checks))
-    st.write(f"Self-check: {score}/{len(checks)} — this is not a Google approval score.")
-    st.markdown("**Useful links**")
+    st.write(f"Self-check: {score}/{len(checks)}. This is not a Google approval score.")
     st.link_button("Google Search Console", "https://search.google.com/search-console/")
     st.link_button("Blogger", "https://www.blogger.com/")
     st.link_button("Google AdSense", "https://www.google.com/adsense/")
-    st.caption("No tool can guarantee AdSense approval, traffic or income. Avoid bulk thin content, fake citations and artificial traffic.")
 
 with tab_affiliate:
     st.subheader("Affiliate idea planner")
-    st.write("Recommend products only when they genuinely help readers. Clearly disclose affiliate links and check current program terms.")
-    with st.form("affiliate_idea"):
+    st.write("Use affiliate links only when genuinely useful to readers, and clearly disclose them.")
+    with st.form("affiliate_form"):
         product = st.text_input("Product or tool")
         problem = st.text_area("Reader problem it solves")
-        experience = st.text_area("Your testing / experience and downsides")
-        url = st.text_input("Affiliate URL (optional)")
-        disclosure = st.checkbox("I will clearly disclose affiliate links")
-        save_idea = st.form_submit_button("Save idea")
+        experience = st.text_area("Your testing, experience, and downsides")
+        affiliate_url = st.text_input("Affiliate URL (optional)")
+        disclosed = st.checkbox("I will clearly disclose affiliate links")
+        save_idea = st.form_submit_button("Save affiliate idea")
     if save_idea:
         if not product.strip() or not problem.strip():
             st.error("Enter a product and the reader problem.")
@@ -173,21 +349,26 @@ with tab_affiliate:
                 ideas = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 ideas = []
-            ideas.append({"created_at": datetime.now().isoformat(timespec="seconds"), "product": product, "reader_problem": problem, "experience": experience, "affiliate_url": url, "disclosure_confirmed": disclosure, "status": "Needs verification"})
+            ideas.append({
+                "created_at": datetime.now().isoformat(timespec="seconds"),
+                "product": product, "reader_problem": problem, "experience": experience,
+                "affiliate_url": affiliate_url, "disclosure_confirmed": disclosed,
+            })
             path.write_text(json.dumps(ideas, ensure_ascii=False, indent=2), encoding="utf-8")
-            st.success("Idea saved for this app instance.")
-    st.caption("Note: Streamlit Community Cloud local files are not reliable permanent storage. Export important drafts and add persistent storage before depending on this for long-term use.")
+            st.success("Affiliate idea saved for this app instance.")
 
-with tab_connect:
-    st.subheader("Integrations — next development phase")
-    st.markdown("""
-- **Blogger API:** import existing posts and save reviewed updates as Blogger drafts.
-- **Search Console API:** clicks, impressions, CTR and average position.
-- **Google Analytics 4 Data API:** pageviews and sessions, if GA4 is installed.
-- **AdSense Management API:** earnings and ad metrics, if your account and API access permit it.
-""")
-    st.link_button("Blogger API documentation", "https://developers.google.com/blogger/docs/3.0/using")
-    st.link_button("Search Console API authorization", "https://developers.google.com/webmaster-tools/v1/how-tos/authorizing")
-    st.link_button("Google Analytics Data API", "https://developers.google.com/analytics/devguides/reporting/data/v1")
-    st.link_button("AdSense Management API", "https://developers.google.com/adsense/management/getting_started")
-    st.error("Do not place OAuth secrets, API keys, refresh tokens or passwords in source code or a public repository. Use Streamlit Secrets/environment variables when integrations are implemented.")
+with tab_setup:
+    st.subheader("Connect Blogger")
+    st.write("This connection requests Blogger API access. You will authorize access on Google's page; the token stays in this browser session and is not committed to GitHub.")
+    st.warning("The OAuth client secret you previously shared must be rotated before connecting. Use the replacement secret only in Streamlit Secrets.")
+    st.write("1. Confirm Blogger API v3 is enabled in Google Cloud.")
+    st.write("2. Add this exact URI to the OAuth client's **Authorized redirect URIs**:")
+    st.code(BLOGGER_REDIRECT_URI)
+    st.write("3. Ensure Streamlit Secrets contains [google] client_id and client_secret.")
+    st.write("4. Click Connect Blogger below.")
+    if st.button("Connect Blogger", type="primary"):
+        connect_blogger()
+    st.divider()
+    st.subheader("What is not integrated yet")
+    st.markdown("- Search Console clicks/impressions/CTR/position\n- GA4 pageviews and sessions\n- AdSense earnings API\n- AI article generation")
+    st.caption("Blogger actions create drafts only. Existing published posts are not changed automatically.")

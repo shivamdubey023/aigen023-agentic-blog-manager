@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#101326">
+  <meta name="description" content="Explore practical developer eBooks and guides from NextGen Tech Notes.">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="NextGen Books">
+  <title>Books for your next step · NextGen Tech Notes</title>
+  <link rel="manifest" href="/ebook/manifest.webmanifest">
+  <link rel="icon" href="/static/ebook/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" sizes="180x180" href="/static/ebook/apple-touch-icon.png">
+  <link rel="stylesheet" href="/static/ebook/app.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="wordmark" href="/ebook/" aria-label="NextGen Tech Notes Books home">
+      <span class="brand-mark" aria-hidden="true">N</span>
+      <span>NextGen <b>Books</b></span>
+    </a>
+    <nav class="top-actions" aria-label="Main navigation">
+      <a class="nav-link" href="#library">Library</a>
+      <button class="button button-quiet install-button" id="install-button" type="button" hidden>Install app</button>
+    </nav>
+  </header>
+
+  <main>
+    <section class="hero" aria-labelledby="hero-title">
+      <div class="hero-copy">
+        <p class="eyebrow"><span class="status-dot"></span> A focused reading corner for builders</p>
+        <h1 id="hero-title">Learn the craft.<br><span>Build what’s next.</span></h1>
+        <p class="hero-intro">Practical guides for the next step in your developer journey. Browse the collection, save titles on this device, and reopen the catalog when you’re offline.</p>
+        <div class="hero-actions">
+          <a class="button button-primary" href="#library">Explore the books <span aria-hidden="true">↓</span></a>
+          <button class="button button-outline install-button" id="install-button-secondary" type="button">Install this app</button>
+        </div>
+        <div class="hero-note"><span aria-hidden="true">↗</span> Checkout is securely handled by the seller’s store.</div>
+      </div>
+      <div class="hero-art" aria-label="Illustration of a developer book">
+        <div class="orbit orbit-one"></div>
+        <div class="orbit orbit-two"></div>
+        <div class="spark spark-one">✳</div>
+        <div class="spark spark-two">✦</div>
+        <div class="book-shadow"></div>
+        <div class="book-cover">
+          <div class="cover-topline">NEXTGEN TECH NOTES</div>
+          <div class="cover-code" aria-hidden="true"><span>01</span><span>def</span><span>build()</span><span>→</span></div>
+          <div class="cover-title">Code<br>to <em>Career</em></div>
+          <div class="cover-bottom">
+            <span>PYTHON · PROJECTS · PREPARATION</span>
+            <span class="cover-monogram">NG</span>
+          </div>
+        </div>
+        <div class="art-caption"><span class="caption-dot"></span> A practical guide, at your pace</div>
+      </div>
+    </section>
+
+    <section class="trust-strip" aria-label="App capabilities">
+      <div><span class="trust-icon">◎</span><span>Made for small screens</span></div>
+      <div><span class="trust-icon">↯</span><span>Install on your home screen</span></div>
+      <div><span class="trust-icon">◌</span><span>Your catalog opens offline</span></div>
+    </section>
+
+    <section class="library-section" id="library" aria-labelledby="library-title">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">THE COLLECTION</p>
+          <h2 id="library-title">Choose your next read</h2>
+          <p class="section-subtitle">Browse guides from NextGen Tech Notes.</p>
+        </div>
+        <label class="search-box">
+          <span class="sr-only">Search books</span>
+          <span aria-hidden="true">⌕</span>
+          <input id="book-search" type="search" placeholder="Search the library" autocomplete="off">
+        </label>
+      </div>
+      <p class="offline-banner" id="offline-banner" role="status" hidden>You’re offline. Showing the last catalog saved on this device.</p>
+      <div class="book-grid" id="book-grid" aria-live="polite">
+        <div class="loading-card"><span class="loader"></span><span>Loading the library…</span></div>
+      </div>
+      <div class="empty-state" id="empty-state" hidden>
+        <span class="empty-icon" aria-hidden="true">⌕</span>
+        <h3>No books found</h3>
+        <p>Try a different search, or check back later for new titles.</p>
+      </div>
+    </section>
+
+    <section class="install-panel">
+      <div class="install-icon" aria-hidden="true">↗</div>
+      <div>
+        <p class="eyebrow">YOUR LIBRARY, ONE TAP AWAY</p>
+        <h2>Make room for your next idea.</h2>
+        <p>Add this app to your home screen for a clean, app-like experience. Your saved titles stay on this device.</p>
+      </div>
+      <button class="button button-light install-button" id="install-button-footer" type="button">How to install</button>
+    </section>
+    <p class="delivery-note">Offline access keeps the catalog and saved titles available. Purchased eBook files are provided by the seller and may need to be downloaded separately.</p>
+  </main>
+
+  <footer class="footer">
+    <a class="wordmark" href="/ebook/"><span class="brand-mark" aria-hidden="true">N</span><span>NextGen <b>Books</b></span></a>
+    <p>© <span id="current-year"></span> NextGen Tech Notes. A reader-friendly home for practical guides.</p>
+    <a href="https://aigen023.blogspot.com/" target="_blank" rel="noopener noreferrer">Visit the publication ↗</a>
+  </footer>
+
+  <dialog class="install-dialog" id="install-dialog" aria-labelledby="install-title">
+    <div class="dialog-top">
+      <div class="install-icon" aria-hidden="true">↗</div>
+      <button class="icon-button" id="close-install-dialog" type="button" aria-label="Close install instructions">×</button>
+    </div>
+    <p class="eyebrow">INSTALL THE APP</p>
+    <h2 id="install-title">Take your library with you.</h2>
+    <div id="install-instructions"></div>
+    <button class="button button-primary dialog-done" id="done-install-dialog" type="button">Got it</button>
+  </dialog>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script src="/static/ebook/app.js" defer></script>
+</body>
+</html>

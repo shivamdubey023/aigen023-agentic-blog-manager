@@ -10,7 +10,7 @@ from typing import Any, Optional
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -492,6 +492,24 @@ def save_single_article(req: SaveArticleRequest):
 def list_all_products():
     return db.list_products()
 
+@app.get("/api/ebook/catalog")
+def get_ebook_catalog():
+    """Public, non-sensitive catalog used by the installable eBook storefront."""
+    catalog = []
+    for product in db.list_products():
+        url = str(product.get("url") or "").strip()
+        if not url.startswith("https://"):
+            continue
+        catalog.append({
+            "id": product["id"],
+            "title": product["title"],
+            "url": url,
+            "price": product.get("price") or "",
+            "description": product.get("description") or "",
+            "badge": product.get("badge") or "Digital guide",
+        })
+    return {"products": catalog}
+
 @app.post("/api/products")
 def save_single_product(req: SaveProductRequest):
     try:
@@ -807,8 +825,32 @@ def get_search_console(days: int = 28):
 
 # Serve Frontend static directory
 STATIC_DIR = Path(__file__).resolve().parents[1] / "static"
+EBOOK_DIR = STATIC_DIR / "ebook"
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+@app.get("/ebook", include_in_schema=False)
+def redirect_ebook_app():
+    return RedirectResponse("/ebook/", status_code=308)
+
+@app.get("/ebook/", include_in_schema=False)
+def serve_ebook_app():
+    return FileResponse(EBOOK_DIR / "index.html")
+
+@app.get("/ebook/manifest.webmanifest", include_in_schema=False)
+def serve_ebook_manifest():
+    return FileResponse(
+        EBOOK_DIR / "manifest.webmanifest",
+        media_type="application/manifest+json",
+    )
+
+@app.get("/ebook/service-worker.js", include_in_schema=False)
+def serve_ebook_service_worker():
+    return FileResponse(
+        EBOOK_DIR / "service-worker.js",
+        media_type="application/javascript",
+        headers={"Service-Worker-Allowed": "/ebook/"},
+    )
 
 @app.get("/")
 def serve_index():

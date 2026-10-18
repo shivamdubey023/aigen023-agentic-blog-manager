@@ -11,6 +11,7 @@ A single-publication content workflow for [NextGen Tech Notes](https://aigen023.
 - Confirmed Blogger draft creation. The app does not publish drafts automatically.
 - Manually triggered previous/next navigation sync for LIVE Blogger posts. It changes live post HTML only after confirmation and reports partial failures.
 - Google Search Console and Blogger API integrations when owner OAuth is configured.
+- An installable eBook storefront/PWA at `/ebook/`, with a product catalog, search, device-local saved titles, install guidance for Android/iOS, and an offline-cached app shell/catalog.
 
 Automated checks are advisory, not guarantees of article accuracy, search ranking, AdSense approval, or income. The application does not claim to have tested generated code or browsed sources unless that actually occurred.
 
@@ -51,6 +52,8 @@ In Google Cloud, enable the Blogger API and Search Console API, configure the OA
 ## Important hosting limitation
 
 Vercel function storage is temporary. This app's SQLite database defaults to `/tmp/content_ops.db` on Vercel, so locally saved articles, OAuth state, and settings may not persist across function instances or deployments. Do not rely on it as durable production storage. A durable database/storage service would add an external dependency and may have cost or quota limits; none is added here. Vercel serverless functions also do not create a continuously running queue worker. Generation and synchronization run only after user actions.
+
+The eBook PWA is a storefront/catalog, not a protected eBook reader. It sends checkout to each product's configured seller URL. Offline mode caches the app and catalog only; purchased files are delivered by the seller. A PDF/EPUB reader, protected downloads, purchase verification, and cross-device accounts are not implemented.
 
 Free hosting and provider quotas are subject to platform limits and can change. This repository cannot guarantee zero cost for every hosting account or third-party service.
 

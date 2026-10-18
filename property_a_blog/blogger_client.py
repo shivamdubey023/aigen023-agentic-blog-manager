@@ -12,7 +12,7 @@ from googleapiclient.errors import HttpError
 
 BLOGGER_SCOPE = "https://www.googleapis.com/auth/blogger"
 SEARCH_CONSOLE_SCOPE = "https://www.googleapis.com/auth/webmasters.readonly"
-IDENTITY_SCOPES = ["openid", "email", "profile"]  # Keep Google OAuth scope aliases consistent with the existing authorization flow.
+IDENTITY_SCOPES = ["openid", "https://www.googleapis.com/auth/userinfo.email", "https://www.googleapis.com/auth/userinfo.profile"]
 SCOPES = IDENTITY_SCOPES + [BLOGGER_SCOPE, SEARCH_CONSOLE_SCOPE]
 BLOG_URL = "https://aigen023.blogspot.com/"
 REDIRECT_URI = "https://aigen023-blog-manager.streamlit.app/"

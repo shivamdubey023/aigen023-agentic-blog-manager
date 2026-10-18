@@ -131,14 +131,21 @@ def queue_rows() -> list[dict[str, Any]]:
           FROM automation_queue q LEFT JOIN articles a ON a.id=q.article_id ORDER BY q.updated_at DESC LIMIT 200""").fetchall()
     return [dict(r) for r in rows]
 
-def log_queue_event(queue_id: int, event: str, *, retry: bool = False) -> None:
+def log_queue_event(queue_id: int, event: str, *, retry: bool = False, state: str | None = None) -> None:
     now = utc_now()
+    if state is not None and state not in {"RUNNING", "PAUSED"}:
+        raise ValueError("Queue item state must be RUNNING or PAUSED")
     with connection() as conn:
         row = conn.execute("SELECT execution_log,retry_count FROM automation_queue WHERE id=?", (queue_id,)).fetchone()
         if not row: return
         count = int(row["retry_count"]) + (1 if retry else 0)
-        conn.execute("UPDATE automation_queue SET execution_log=?,retry_count=?,updated_at=? WHERE id=?",
-          (_append_log(row["execution_log"],{"at":now,"event":event}),count,now,queue_id))
+        log = _append_log(row["execution_log"], {"at": now, "event": event})
+        if state is None:
+            conn.execute("UPDATE automation_queue SET execution_log=?,retry_count=?,updated_at=? WHERE id=?",
+                         (log,count,now,queue_id))
+        else:
+            conn.execute("UPDATE automation_queue SET state=?,execution_log=?,retry_count=?,updated_at=? WHERE id=?",
+                         (state,log,count,now,queue_id))
 
 def save_affiliate(product_name: str, keywords: list[str], tracking_url: str, disclosure: str,
                    affiliate_id: int | None = None) -> int:

@@ -53,9 +53,11 @@ def build_schema(title: str, description: str, keywords: str, faq: list[dict[str
     return result
 
 def _inject_jsonld(body: str, schema: dict[str, Any]) -> str:
-    scripts = [f'<script type="application/ld+json">{json.dumps(v,ensure_ascii=False).replace("</","<\\/")}</script>' for v in schema.values()]
-    return "\n".join(scripts) + "\n" + body
-
+    scripts = []
+    for value in schema.values():
+        payload = json.dumps(value, ensure_ascii=False).replace("</", "<\\\\/")
+        scripts.append('<script type="application/ld+json">' + payload + '</script>')
+    return "\\n".join(scripts) + "\\n" + body
 def affiliate_box(product_name: str, tracking_url: str, disclosure: str) -> str:
     url = html.escape(tracking_url.strip(), quote=True)
     if not url.startswith(("https://","http://")): raise ValueError("Affiliate URL must begin with http:// or https://")

@@ -71,6 +71,12 @@ def finish_oauth(
         scopes=SCOPES, state=state, redirect_uri=REDIRECT_URI,
         code_verifier=code_verifier,
     )
+    # Google may return canonical OIDC scope URLs (userinfo.email/profile)
+    # even when the request used the standard aliases (email/profile).
+    # OAuthlib treats that equivalent representation as a scope change and
+    # raises an error before credentials are available. We validate identity
+    # below via the userinfo endpoint and use only the granted API scopes.
+    flow.oauth2session._client.scope = None
     flow.fetch_token(code=code)
     creds=flow.credentials
     # Verify the Google identity using the access token; never trust browser-supplied email.

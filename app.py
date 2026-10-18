@@ -91,6 +91,29 @@ with tabs[0]:
     queue = db.queue_rows()
     if queue:
         st.dataframe(pd.DataFrame(queue)[[c for c in ["id","title","topic","state","retry_count","max_retries","updated_at"] if c in queue[0]]],use_container_width=True,hide_index=True)
+        batch_size=st.number_input("Batch size (queued items to prepare for human review)",min_value=1,max_value=25,value=5,step=1)
+        if st.button("Process batch → prepare drafts for review"):
+            candidates=[x for x in queue if x.get("state")=="RUNNING" and x.get("article_id") and x.get("article_status")=="QUEUED"][:int(batch_size)]
+            if not candidates:
+                st.info("No RUNNING queue items linked to QUEUED articles. Start/restart the queue and add articles first.")
+            else:
+                processed=0
+                for item in candidates:
+                    article=db.get_article(item["article_id"])
+                    if not article: 
+                        db.log_queue_event(item["id"],"Skipped: article record missing",retry=True,state="PAUSED")
+                        continue
+                    try:
+                        rendered,schema=render_article(article["markdown_body"],article["title"],article["primary_keyword"])
+                        db.save_article(topic=article["topic"],primary_keyword=article["primary_keyword"],title=article["title"],
+                          markdown_body=article["markdown_body"],rendered_html=rendered,schema_json=schema,status="DRAFT",
+                          article_id=article["id"],blogger_post_id=article["blogger_post_id"],blogger_blog_id=article["blogger_blog_id"])
+                        db.log_queue_event(item["id"],"Batch prepared article for human review",state="PAUSED")
+                        processed+=1
+                    except Exception as exc:
+                        db.log_queue_event(item["id"],f"Batch processing error: {exc}",retry=True,state="PAUSED")
+                st.success(f"Prepared {processed} draft(s) for review. Nothing was published.")
+                st.rerun()
         choices = {f"#{x['id']} · {x.get('title') or x.get('topic') or 'Untitled'}":x for x in queue}
         chosen_label=st.selectbox("Queue item",list(choices),key="queue_selected")
         selected=choices[chosen_label]

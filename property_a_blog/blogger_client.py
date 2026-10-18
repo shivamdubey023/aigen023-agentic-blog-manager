@@ -11,7 +11,8 @@ from googleapiclient.errors import HttpError
 
 BLOGGER_SCOPE = "https://www.googleapis.com/auth/blogger"
 SEARCH_CONSOLE_SCOPE = "https://www.googleapis.com/auth/webmasters.readonly"
-SCOPES = [BLOGGER_SCOPE, SEARCH_CONSOLE_SCOPE]
+IDENTITY_SCOPES = ["openid", "email", "profile"]
+SCOPES = IDENTITY_SCOPES + [BLOGGER_SCOPE, SEARCH_CONSOLE_SCOPE]
 BLOG_URL = "https://aigen023.blogspot.com/"
 REDIRECT_URI = "https://aigen023-blog-manager.streamlit.app/"
 
@@ -47,7 +48,19 @@ def finish_oauth(code: str, state: str, session_state: Any) -> Credentials:
       "redirect_uris":[REDIRECT_URI]}},scopes=SCOPES,state=expected,redirect_uri=REDIRECT_URI)
     flow.fetch_token(code=code)
     creds=flow.credentials
+    # Verify the Google identity using the access token; do not trust an email supplied by the browser.
+    import requests
+    response = requests.get(
+        "https://openidconnect.googleapis.com/v1/userinfo",
+        headers={"Authorization": f"Bearer {creds.token}"},
+        timeout=15,
+    )
+    response.raise_for_status()
+    identity = response.json()
+    if not identity.get("email") or identity.get("email_verified") is not True:
+        raise ValueError("Google did not return a verified email address. Reconnect and approve the email scope.")
     session_state["google_api_token"]=json.loads(creds.to_json())
+    session_state["google_user"]={"email":identity["email"],"name":identity.get("name","")}
     session_state.pop("google_api_oauth_state",None)
     session_state.pop("google_api_oauth_client",None)
     return creds

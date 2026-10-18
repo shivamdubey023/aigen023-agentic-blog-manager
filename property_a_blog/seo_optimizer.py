@@ -66,8 +66,50 @@ def affiliate_box(product_name: str, tracking_url: str, disclosure: str) -> str:
       + '" rel="sponsored nofollow noopener" target="_blank">' + html.escape(product_name.strip())
       + '</a></p></aside>')
 
+def ebook_card_box(
+    title: str = "Code to Career — The Python Fresher to Job-Ready Developer",
+    product_url: str = "https://codetocareer52.myinstamojo.com/product/code-to-career",
+    price: str = "₹499",
+    tagline: str = "Fast-track from beginner to an interview-ready, high-earning Python developer.",
+    cover_image_url: str = "https://storeassets.im-cdn.com/media-manager/demostores/RUANbj2YRQm8vlaCVWuH_hero-banner_1440x650_webp.png",
+    bullet_points: list[str] | None = None,
+) -> str:
+    """Generate a responsive, high-converting eBook CTA banner for Instamojo / Cashfree sales."""
+    url = html.escape(product_url.strip(), quote=True)
+    t = html.escape(title.strip())
+    p = html.escape(price.strip())
+    tag = html.escape(tagline.strip())
+    bullets = bullet_points or [
+        "Hands-on production projects & code repositories",
+        "Step-by-step interview preparation & architecture breakdowns",
+        "Instant digital download with free lifetime updates",
+    ]
+    bullet_items = "".join(f'<li style="margin-bottom:6px;">✓ {html.escape(b)}</li>' for b in bullets)
+
+    return f'''<!-- Instamojo eBook CTA Box -->
+<div class="instamojo-ebook-card" style="margin: 32px 0; padding: 24px; border: 2px solid #4f46e5; border-radius: 16px; background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%); color: #ffffff; box-shadow: 0 10px 30px -5px rgba(79, 70, 229, 0.3); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
+  <div style="display: flex; flex-wrap: wrap; gap: 20px; align-items: center;">
+    <div style="flex: 1 1 300px;">
+      <span style="display: inline-block; padding: 4px 12px; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; background: #fbbf24; color: #000000; border-radius: 20px; margin-bottom: 12px;">★ Recommended Resource</span>
+      <h3 style="margin: 0 0 8px 0; font-size: 22px; font-weight: 800; line-height: 1.3; color: #ffffff;">{t}</h3>
+      <p style="margin: 0 0 14px 0; font-size: 15px; color: #cbd5e1; line-height: 1.5;">{tag}</p>
+      <ul style="list-style: none; padding: 0; margin: 0 0 18px 0; font-size: 14px; color: #94a3b8;">
+        {bullet_items}
+      </ul>
+      <div style="display: flex; align-items: center; gap: 16px; flex-wrap: wrap;">
+        <span style="font-size: 24px; font-weight: 900; color: #34d399;">{p}</span>
+        <a href="{url}" target="_blank" rel="noopener noreferrer" style="display: inline-block; padding: 12px 28px; background: #4f46e5; color: #ffffff; text-decoration: none; font-weight: 700; font-size: 15px; border-radius: 8px; transition: background 0.2s; box-shadow: 0 4px 14px rgba(79, 70, 229, 0.4);">
+          Get eBook on Instamojo &rarr;
+        </a>
+      </div>
+    </div>
+  </div>
+</div>
+<!-- End eBook CTA Box -->'''
+
 def render_article(markdown_text: str, title: str, primary_keyword: str="", *, include_toc: bool=True,
                    description: str="", faq: list[dict[str,str]]|None=None, affiliate_html: str="",
+                   ebook_html: str="", featured_image_html: str="",
                    blog_url: str="https://aigen023.blogspot.com/") -> tuple[str,dict[str,Any]]:
     headings = parse_headings(markdown_text)
     text = markdown_text.strip()
@@ -79,7 +121,17 @@ def render_article(markdown_text: str, title: str, primary_keyword: str="", *, i
     body = _add_heading_ids(body, headings)
     schema = build_schema(title,description or f"Practical tutorial about {primary_keyword or title}.",primary_keyword,faq,blog_url)
     body = _inject_jsonld(body,schema)
-    if affiliate_html: body += "\n" + affiliate_html
+    if featured_image_html:
+        # Inject right after opening H1 if possible, else at the beginning
+        h1_match = re.search(r"(<h1[^>]*>.*?</h1>)", body, flags=re.I|re.S)
+        if h1_match:
+            body = body[:h1_match.end()] + "\n" + featured_image_html + body[h1_match.end():]
+        else:
+            body = featured_image_html + "\n" + body
+    if ebook_html:
+        body += "\n" + ebook_html
+    if affiliate_html:
+        body += "\n" + affiliate_html
     return body,schema
 
 def content_quality_checks(title: str, markdown_text: str) -> list[str]:

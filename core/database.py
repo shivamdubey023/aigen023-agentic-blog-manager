@@ -7,15 +7,28 @@ from pathlib import Path
 from typing import Any, Iterator
 
 APP_ROOT = Path(__file__).resolve().parents[1]
-DB_PATH = Path(os.environ.get("CONTENT_OPS_DB", APP_ROOT / "content_ops.db"))
+
+def get_db_path() -> Path:
+    if "CONTENT_OPS_DB" in os.environ:
+        return Path(os.environ["CONTENT_OPS_DB"])
+    if os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
+        return Path("/tmp/content_ops.db")
+    return APP_ROOT / "content_ops.db"
+
+DB_PATH = get_db_path()
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 @contextmanager
 def connection() -> Iterator[sqlite3.Connection]:
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(DB_PATH), timeout=15, isolation_level="DEFERRED")
+    path = get_db_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        path = Path("/tmp/content_ops.db")
+        path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(path), timeout=15, isolation_level="DEFERRED")
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout = 15000")
     try:

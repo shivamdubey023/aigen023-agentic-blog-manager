@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NextGen Tech Notes — AI Agentic Blog & Monetization Hub</title>
+  <meta name="description" content="Multi-model AI technical blogging automation, AdSense quality enhancer, and eBook monetization engine.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+  <!-- App Container -->
+  <div id="app-wrapper">
+    <!-- Top Header -->
+    <header class="app-header">
+      <div class="header-left">
+        <div class="brand-badge">
+          <span class="pulse-dot"></span>
+          <span class="brand-version">v2.0 · Vercel Cloud</span>
+        </div>
+        <h1 class="brand-title">NextGen <span>Agentic Hub</span></h1>
+        <p class="brand-subtitle">Autonomous Tech Blogging · AdSense Optimizer · eBook Sales Engine</p>
+      </div>
+      <div class="header-right">
+        <div class="status-pill" id="google-status-pill">
+          <span class="indicator red" id="google-indicator"></span>
+          <span id="google-status-text">Blogger: Disconnected</span>
+        </div>
+        <button class="btn btn-outline" id="connect-google-btn">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12.545,10.239v3.821h5.445c-0.712,2.315-2.647,3.972-5.445,3.972c-3.332,0-6.033-2.701-6.033-6.032s2.701-6.032,6.033-6.032c1.498,0,2.866,0.549,3.921,1.453l2.814-2.814C17.503,2.988,15.139,2,12.545,2C7.021,2,2.543,6.477,2.543,12s4.478,10,10.002,10c8.396,0,10.249-7.85,9.426-11.748L12.545,10.239z"/></svg>
+          Google Login
+        </button>
+      </div>
+    </header>
+
+    <!-- Navigation Tabs -->
+    <nav class="app-nav">
+      <button class="nav-tab active" data-tab="tab-generator">
+        <span class="tab-icon">⚡</span> AI Generator
+      </button>
+      <button class="nav-tab" data-tab="tab-rewriter">
+        <span class="tab-icon">🔄</span> Blog Rewriter & AdSense
+      </button>
+      <button class="nav-tab" data-tab="tab-images">
+        <span class="tab-icon">🎨</span> Free Image Studio
+      </button>
+      <button class="nav-tab" data-tab="tab-editor">
+        <span class="tab-icon">📝</span> Editor & Live Preview
+      </button>
+      <button class="nav-tab" data-tab="tab-monetize">
+        <span class="tab-icon">💰</span> Instamojo & Affiliates
+      </button>
+      <button class="nav-tab" data-tab="tab-blogger">
+        <span class="tab-icon">🌐</span> Blogger & Console
+      </button>
+      <button class="nav-tab" data-tab="tab-settings">
+        <span class="tab-icon">⚙️</span> API Keys & Config
+      </button>
+    </nav>
+
+    <!-- Main Content Area -->
+    <main class="app-main">
+
+      <!-- TAB 1: AI GENERATOR -->
+      <section class="tab-pane active" id="tab-generator">
+        <div class="grid-2col">
+          <div class="card glass-card">
+            <div class="card-header">
+              <h2>Draft New Technical Tutorial</h2>
+              <span class="badge blue">Multi-Model Engine</span>
+            </div>
+            <form id="generator-form">
+              <div class="form-row">
+                <div class="form-group flex-1">
+                  <label for="gen-provider">AI Provider</label>
+                  <select id="gen-provider" class="form-control">
+                    <option value="gemini">Google Gemini (Free Tier)</option>
+                    <option value="groq" selected>Groq Cloud (Free & Ultra Fast)</option>
+                    <option value="cohere">Cohere (Free Trial)</option>
+                    <option value="openai">OpenAI ChatGPT</option>
+                    <option value="anthropic">Anthropic Claude</option>
+                  </select>
+                </div>
+                <div class="form-group flex-1">
+                  <label for="gen-model">Model</label>
+                  <select id="gen-model" class="form-control">
+                    <option value="llama-3.3-70b-versatile">llama-3.3-70b-versatile</option>
+                    <option value="deepseek-r1-distill-llama-70b">deepseek-r1-distill-llama-70b</option>
+                    <option value="llama-3.1-8b-instant">llama-3.1-8b-instant</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label for="gen-topic">Tutorial Topic</label>
+                <input type="text" id="gen-topic" class="form-control" placeholder="e.g. Deploying FastAPI with Docker on Render" required>
+              </div>
+
+              <div class="form-row">
+                <div class="form-group flex-1">
+                  <label for="gen-keyword">Primary Target Keyword</label>
+                  <input type="text" id="gen-keyword" class="form-control" placeholder="e.g. FastAPI Docker Render deployment">
+                </div>
+                <div class="form-group flex-1">
+                  <label for="gen-audience">Target Reader</label>
+                  <select id="gen-audience" class="form-control">
+                    <option value="Beginner">Beginner / Student</option>
+                    <option value="Working developer" selected>Working Developer</option>
+                    <option value="Senior engineer">Senior / Staff Engineer</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label for="gen-notes">Author Notes & Specific Code Requirements</label>
+                <textarea id="gen-notes" class="form-control" rows="3" placeholder="Specify python versions, sample terminal outputs, specific error cases, or required libraries..."></textarea>
+              </div>
+
+              <div class="form-footer">
+                <button type="submit" class="btn btn-primary" id="btn-run-generate">
+                  <span class="btn-spinner hidden" id="gen-spinner"></span>
+                  Generate 1,500+ Word Tutorial &rarr;
+                </button>
+              </div>
+            </form>
+          </div>
+
+          <!-- Quick Preview / Status -->
+          <div class="card glass-card">
+            <div class="card-header">
+              <h2>Generation Summary</h2>
+              <span class="badge green" id="gen-status-badge">Ready</span>
+            </div>
+            <div class="summary-body" id="gen-summary-box">
+              <div class="empty-state">
+                <div class="empty-icon">💡</div>
+                <p>Fill out the topic and click generate. The agent will construct a complete tutorial with prerequisites, verified code, troubleshooting tracebacks, and verification checklists.</p>
+              </div>
+            </div>
+            <div class="action-buttons-group hidden" id="gen-actions">
+              <button class="btn btn-accent" id="btn-send-to-editor">Open in Live Editor &rarr;</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 2: BLOG REWRITER & ADSENSE BOOSTER -->
+      <section class="tab-pane" id="tab-rewriter">
+        <div class="grid-2col">
+          <div class="card glass-card">
+            <div class="card-header">
+              <h2>AdSense Quality & Content Rewriter</h2>
+              <span class="badge purple">E-E-A-T Optimizer</span>
+            </div>
+            <p class="section-desc">Google AdSense requires original, in-depth value. Select an existing post from your Blogger blog or paste previous content below to rewrite and expand it.</p>
+            
+            <div class="form-group">
+              <label for="rewrite-blogger-select">Import Existing Post From Blogger</label>
+              <div class="input-with-button">
+                <select id="rewrite-blogger-select" class="form-control">
+                  <option value="">-- Connect Google to Load Blogger Posts --</option>
+                </select>
+                <button class="btn btn-secondary" id="btn-fetch-blogger-posts">Load Posts</button>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label for="rewrite-title">Original Post Title</label>
+              <input type="text" id="rewrite-title" class="form-control" placeholder="Original title to rewrite">
+            </div>
+
+            <div class="form-group">
+              <label for="rewrite-content">Original Post Content (HTML or Markdown)</label>
+              <textarea id="rewrite-content" class="form-control font-mono" rows="8" placeholder="Paste previous thin or generic article text here..."></textarea>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group flex-1">
+                <label for="rewrite-provider">AI Model for Rewrite</label>
+                <select id="rewrite-provider" class="form-control">
+                  <option value="groq" selected>Groq (Llama 3.3 70B - Free)</option>
+                  <option value="gemini">Gemini 2.5 Flash (Free)</option>
+                  <option value="openai">OpenAI GPT-4o</option>
+                  <option value="anthropic">Claude 3.5 Sonnet</option>
+                </select>
+              </div>
+              <div class="form-group flex-1">
+                <label for="rewrite-keyword">Target SEO Keyword</label>
+                <input type="text" id="rewrite-keyword" class="form-control" placeholder="Target keyword">
+              </div>
+            </div>
+
+            <button class="btn btn-primary" id="btn-run-rewrite">
+              <span class="btn-spinner hidden" id="rewrite-spinner"></span>
+              Rewrite & Expand for AdSense Approval &rarr;
+            </button>
+          </div>
+
+          <div class="card glass-card">
+            <div class="card-header">
+              <h2>Rewritten Output & Compliance</h2>
+              <span class="badge yellow" id="rewrite-badge">Waiting</span>
+            </div>
+            <div id="rewrite-result-box" class="summary-body">
+              <div class="empty-state">
+                <div class="empty-icon">🛡️</div>
+                <p>The rewriter eliminates thin generic filler, injects reproducible code snippets, real error tracebacks, and structured FAQs to maximize AdSense approval chances.</p>
+              </div>
+            </div>
+            <div class="action-buttons-group hidden" id="rewrite-actions">
+              <button class="btn btn-accent" id="btn-send-rewritten-to-editor">Send to Editor & Publisher &rarr;</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 3: FREE IMAGE STUDIO -->
+      <section class="tab-pane" id="tab-images">
+        <div class="card glass-card">
+          <div class="card-header">
+            <h2>100% Free AI Blog Cover Studio</h2>
+            <span class="badge green">Zero API Key Needed · Pollinations.ai</span>
+          </div>
+          <p class="section-desc">Generate high-resolution (1200x630) featured images for your blog posts without paying for DALL-E or Midjourney.</p>
+
+          <div class="grid-2col">
+            <div>
+              <div class="form-group">
+                <label for="img-topic-input">Tutorial Topic (Auto-Generates Visual Prompt)</label>
+                <div class="input-with-button">
+                  <input type="text" id="img-topic-input" class="form-control" placeholder="e.g. Python Asyncio Event Loop Mastery">
+                  <button class="btn btn-secondary" id="btn-auto-prompt">Make Prompt</button>
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label for="img-prompt-input">Detailed Image Prompt</label>
+                <textarea id="img-prompt-input" class="form-control" rows="4" placeholder="Describe the visual aesthetic, lighting, style..."></textarea>
+              </div>
+
+              <div class="form-row">
+                <div class="form-group flex-1">
+                  <label for="img-aspect">Dimensions</label>
+                  <select id="img-aspect" class="form-control">
+                    <option value="1200x630" selected>1200 x 630 (Blogger / OpenGraph)</option>
+                    <option value="1080x1080">1080 x 1080 (Square / Instagram)</option>
+                    <option value="1600x900">1600 x 900 (16:9 HD Banner)</option>
+                  </select>
+                </div>
+                <div class="form-group flex-1">
+                  <label>&nbsp;</label>
+                  <button class="btn btn-primary full-width" id="btn-generate-image">
+                    <span class="btn-spinner hidden" id="img-spinner"></span>
+                    Generate Free Cover &rarr;
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div class="image-preview-panel">
+              <div id="image-display-container" class="image-display-empty">
+                <span>Preview will appear here</span>
+              </div>
+              <div class="image-actions hidden" id="image-actions">
+                <input type="text" id="generated-image-url" class="form-control font-mono" readonly>
+                <button class="btn btn-accent" id="btn-insert-image-editor">Insert in Current Article</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 4: EDITOR & LIVE PREVIEW -->
+      <section class="tab-pane" id="tab-editor">
+        <div class="editor-layout">
+          <!-- Editor Controls Bar -->
+          <div class="editor-toolbar">
+            <div class="toolbar-left">
+              <input type="text" id="editor-title" class="editor-title-input" placeholder="Enter article title here..." required>
+            </div>
+            <div class="toolbar-right">
+              <label class="toggle-control">
+                <input type="checkbox" id="toggle-toc" checked>
+                <span>Auto TOC</span>
+              </label>
+              <label class="toggle-control">
+                <input type="checkbox" id="toggle-ebook" checked>
+                <span>Instamojo eBook</span>
+              </label>
+              <select id="select-affiliate" class="form-control-sm">
+                <option value="">No Affiliate Box</option>
+              </select>
+              <button class="btn btn-secondary btn-sm" id="btn-refresh-preview">Render Preview</button>
+              <button class="btn btn-primary btn-sm" id="btn-save-db">Save Draft</button>
+              <button class="btn btn-accent btn-sm" id="btn-upload-blogger">Upload to Blogger</button>
+            </div>
+          </div>
+
+          <!-- Split Workspace: Markdown Left, HTML Preview Right -->
+          <div class="editor-split">
+            <div class="editor-pane">
+              <div class="pane-header">
+                <span>Markdown Source</span>
+                <span id="word-count-badge" class="badge">0 words</span>
+              </div>
+              <textarea id="markdown-editor" class="code-editor" placeholder="Write or paste your Markdown tutorial here..."></textarea>
+            </div>
+
+            <div class="preview-pane">
+              <div class="pane-header">
+                <span>Live Blogger Render & Structured Data</span>
+                <div class="preview-toggles">
+                  <button class="view-btn active" data-view="rendered">Preview</button>
+                  <button class="view-btn" data-view="html">HTML Code</button>
+                  <button class="view-btn" data-view="schema">JSON-LD Schema</button>
+                </div>
+              </div>
+
+              <!-- Quality Checklist Warnings -->
+              <div id="quality-warnings-banner" class="warnings-banner hidden"></div>
+
+              <div id="preview-content-rendered" class="preview-body prose">
+                <p class="text-muted">Type markdown on the left or load an article to see live rendered HTML with Table of Contents, eBook CTA cards, and affiliate disclosures.</p>
+              </div>
+
+              <div id="preview-content-html" class="preview-body hidden">
+                <textarea id="raw-html-viewer" class="code-editor font-mono" readonly></textarea>
+              </div>
+
+              <div id="preview-content-schema" class="preview-body hidden">
+                <pre id="raw-schema-viewer" class="json-viewer"></pre>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 5: MONETIZATION & EBOOK VAULT -->
+      <section class="tab-pane" id="tab-monetize">
+        <div class="grid-2col">
+          <!-- Instamojo Showcase & Configuration -->
+          <div class="card glass-card">
+            <div class="card-header">
+              <h2>Instamojo eBook Integration</h2>
+              <span class="badge green">Live Product Active</span>
+            </div>
+            <p class="section-desc">Your active digital eBook on Instamojo can be automatically converted into a high-converting CTA card inside relevant blog posts to drive sales.</p>
+            
+            <div class="form-group">
+              <label for="ebook-title-cfg">eBook Title</label>
+              <input type="text" id="ebook-title-cfg" class="form-control" value="Code to Career — The Python Fresher to Job-Ready Developer">
+            </div>
+
+            <div class="form-group">
+              <label for="ebook-url-cfg">Instamojo Store URL</label>
+              <input type="text" id="ebook-url-cfg" class="form-control" value="https://codetocareer52.myinstamojo.com/product/code-to-career">
+            </div>
+
+            <div class="form-row">
+              <div class="form-group flex-1">
+                <label for="ebook-price-cfg">Price</label>
+                <input type="text" id="ebook-price-cfg" class="form-control" value="₹499">
+              </div>
+              <div class="form-group flex-1">
+                <label for="ebook-btn-text">CTA Button Text</label>
+                <input type="text" id="ebook-btn-text" class="form-control" value="Get eBook on Instamojo &rarr;">
+              </div>
+            </div>
+
+            <div class="ebook-preview-box">
+              <h4>Live CTA Card Preview:</h4>
+              <div id="ebook-live-preview"></div>
+            </div>
+          </div>
+
+          <!-- Affiliate Vault -->
+          <div class="card glass-card">
+            <div class="card-header">
+              <h2>Affiliate Link Vault</h2>
+              <span class="badge blue">rel="sponsored nofollow"</span>
+            </div>
+            <p class="section-desc">Store your affiliate links with compliant disclosures so they can be inserted into any post with one click.</p>
+
+            <form id="affiliate-form">
+              <div class="form-group">
+                <label for="aff-name">Product / Tool Name</label>
+                <input type="text" id="aff-name" class="form-control" placeholder="e.g. DigitalOcean / Hostinger" required>
+              </div>
+
+              <div class="form-group">
+                <label for="aff-url">Tracking URL (http/https)</label>
+                <input type="url" id="aff-url" class="form-control" placeholder="https://..." required>
+              </div>
+
+              <div class="form-group">
+                <label for="aff-keywords">Trigger Keywords (comma separated)</label>
+                <input type="text" id="aff-keywords" class="form-control" placeholder="vps, hosting, cloud server">
+              </div>
+
+              <div class="form-group">
+                <label for="aff-disclosure">Disclosure Text</label>
+                <textarea id="aff-disclosure" class="form-control" rows="2">This article may contain affiliate links. If you buy through these links, we may earn a commission at no additional cost to you.</textarea>
+              </div>
+
+              <button type="submit" class="btn btn-secondary">Save Affiliate Entry</button>
+            </form>
+
+            <div class="affiliate-list-container">
+              <h4>Active Affiliate Entries</h4>
+              <div id="affiliates-table-container"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 6: BLOGGER & SEARCH CONSOLE -->
+      <section class="tab-pane" id="tab-blogger">
+        <div class="grid-2col">
+          <div class="card glass-card">
+            <div class="card-header">
+              <h2>Connected Blogger Publication</h2>
+              <span class="badge blue">Google Blogger API v3</span>
+            </div>
+            <div class="info-callout">
+              <strong>Publication Target:</strong> <a href="https://aigen023.blogspot.com/" target="_blank" rel="noopener">https://aigen023.blogspot.com/</a><br>
+              <strong>Safety Guardrail:</strong> AI articles are always uploaded as <em>DRAFTS</em>. No existing live post is ever overwritten without human confirmation.
+            </div>
+
+            <div class="form-group mt-16">
+              <label for="active-blog-selector">Select Blogger Blog</label>
+              <select id="active-blog-selector" class="form-control">
+                <option value="">-- Connect Google to Load Blogs --</option>
+              </select>
+            </div>
+
+            <div class="action-buttons-group">
+              <button class="btn btn-secondary" id="btn-refresh-blogs">Refresh Blog List</button>
+              <a href="https://draft.blogger.com/" target="_blank" class="btn btn-outline">Open Blogger Dashboard &rarr;</a>
+            </div>
+
+            <div class="blogger-posts-table-wrapper mt-20">
+              <h4>Recent Posts on Blogger</h4>
+              <div id="blogger-posts-container">
+                <p class="text-muted">Connect Google in the top bar to inspect existing posts.</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="card glass-card">
+            <div class="card-header">
+              <h2>Search Console Performance</h2>
+              <span class="badge yellow">Real Organic Queries</span>
+            </div>
+            <p class="section-desc">View real Google Search queries and impressions for <code>aigen023.blogspot.com</code>. No fabricated metrics.</p>
+
+            <div class="form-row">
+              <div class="form-group flex-1">
+                <label for="sc-period">Reporting Period</label>
+                <select id="sc-period" class="form-control">
+                  <option value="28">Last 28 Days</option>
+                  <option value="14">Last 14 Days</option>
+                  <option value="7">Last 7 Days</option>
+                </select>
+              </div>
+              <div class="form-group flex-1">
+                <label>&nbsp;</label>
+                <button class="btn btn-secondary full-width" id="btn-fetch-sc">Fetch Insights</button>
+              </div>
+            </div>
+
+            <div id="sc-metrics-container" class="sc-metrics-box">
+              <p class="text-muted">Click "Fetch Insights" to view your Search Console metrics.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 7: API KEYS & SETTINGS -->
+      <section class="tab-pane" id="tab-settings">
+        <div class="card glass-card max-w-800 mx-auto">
+          <div class="card-header">
+            <h2>AI Models & API Configuration</h2>
+            <span class="badge green">Saved Securely in Browser & Vercel</span>
+          </div>
+          <p class="section-desc">Configure your LLM provider keys. You can save them here in the browser or set them as environment variables on your Vercel Dashboard for zero setup on every device.</p>
+
+          <form id="keys-form">
+            <div class="form-group">
+              <label for="key-groq">Groq Cloud API Key <span class="badge green">100% Free · Recommended</span></label>
+              <input type="password" id="key-groq" class="form-control font-mono" placeholder="gsk_...">
+              <small class="helper-text">Get a free key instantly at <a href="https://console.groq.com/" target="_blank">console.groq.com</a> (supports Llama 3.3 70B & DeepSeek R1).</small>
+            </div>
+
+            <div class="form-group">
+              <label for="key-gemini">Google Gemini API Key <span class="badge blue">Free Tier</span></label>
+              <input type="password" id="key-gemini" class="form-control font-mono" placeholder="AIzaSy...">
+              <small class="helper-text">Get your key from <a href="https://aistudio.google.com/" target="_blank">Google AI Studio</a>.</small>
+            </div>
+
+            <div class="form-group">
+              <label for="key-cohere">Cohere API Key <span class="badge purple">Free Trial</span></label>
+              <input type="password" id="key-cohere" class="form-control font-mono" placeholder="...">
+              <small class="helper-text">Get your trial key at <a href="https://dashboard.cohere.com/" target="_blank">dashboard.cohere.com</a>.</small>
+            </div>
+
+            <div class="form-group">
+              <label for="key-openai">OpenAI API Key (Optional)</label>
+              <input type="password" id="key-openai" class="form-control font-mono" placeholder="sk-...">
+            </div>
+
+            <div class="form-group">
+              <label for="key-anthropic">Anthropic Claude API Key (Optional)</label>
+              <input type="password" id="key-anthropic" class="form-control font-mono" placeholder="sk-ant-...">
+            </div>
+
+            <button type="submit" class="btn btn-primary">Save API Keys in Browser &rarr;</button>
+          </form>
+
+          <div class="info-callout mt-24">
+            <h4>Deploying to Vercel?</h4>
+            <p>On your Vercel Project Settings &rarr; <strong>Environment Variables</strong>, you can add:</p>
+            <ul style="margin: 8px 0 0 20px; font-family: monospace; font-size: 13px;">
+              <li>GROQ_API_KEY</li>
+              <li>GEMINI_API_KEY</li>
+              <li>GOOGLE_CLIENT_ID & GOOGLE_CLIENT_SECRET</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <!-- Toast Notification Container -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <script src="/static/js/app.js"></script>
+</body>
+</html>

@@ -24,6 +24,12 @@ class SeoTests(unittest.TestCase):
     def test_quality_checks_are_warnings_not_exception(self):
         warnings = content_quality_checks("Short", "# Short\n\nTiny")
         self.assertTrue(any("words" in x.lower() for x in warnings))
+    def test_ebook_card_box_renders_instamojo_cta(self):
+        from property_a_blog.seo_optimizer import ebook_card_box
+        box = ebook_card_box(title="Code to Career", product_url="https://codetocareer52.myinstamojo.com/product/code-to-career")
+        self.assertIn("Code to Career", box)
+        self.assertIn("https://codetocareer52.myinstamojo.com/product/code-to-career", box)
+        self.assertIn("Get eBook on Instamojo", box)
 
 class DatabaseTests(unittest.TestCase):
     def test_schema_initializes_and_article_roundtrips(self):

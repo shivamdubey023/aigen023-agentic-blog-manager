@@ -1,23 +1,22 @@
-# Aigen023 Blog Manager
+# NextGen Tech Notes — Content Operations Hub
 
-Hosted app for NextGen Tech Notes: Blogger drafts, AI-assisted article generation, image selection, SEO checklist, and reporting API integrations.
+A lean Streamlit dashboard for the technical publication [NextGen Tech Notes](https://aigen023.blogspot.com/). It stores article drafts and review queues in SQLite, renders Markdown as Blogger-ready HTML, generates editorial review warnings and JSON-LD, and connects to Blogger and Google Search Console.
 
-## Features in this build
-- Google sign-in with an email allowlist.
-- Google OAuth connection for Blogger, Search Console, GA4 Data API, and AdSense Management API.
-- Lists accessible Blogger blogs and recent posts.
-- AI-assisted Markdown article draft generation using Gemini API.
-- Wikimedia Commons image search with source, author, and license metadata.
-- Saves local drafts and creates Blogger drafts only after explicit confirmation.
-- Search Console daily clicks/impressions/CTR/position rows.
-- GA4 pageviews, sessions, and active users for a property the signed-in account can access.
-- AdSense reports when the account is eligible and API access is enabled.
+**No YouTube/video/audio pipeline is included. No live posts are automatically published or overwritten.** AI-generated text is always a draft and must be checked by a human. This project does not guarantee search rankings, AdSense approval, or earnings.
 
-## Deploy
-The Streamlit Community Cloud app is https://aigen023-blog-manager.streamlit.app/. Changes pushed to `main` trigger deployment; check Streamlit app logs if the build fails.
+## Features
 
-## Streamlit Secrets
-Open Streamlit Community Cloud → app → **Manage app → Settings → Secrets**. Add the complete TOML below and replace every placeholder. Use a newly rotated OAuth secret; the previously shared secret must not be reused. Do not commit secrets to GitHub.
+- SQLite tables for articles, automation queue state/logs, and affiliate disclosures.
+- Editor, Markdown preview, TOC generation, matching heading anchors, TechArticle JSON-LD, optional FAQPage JSON-LD helper, and affiliate boxes using `rel="sponsored nofollow noopener"`.
+- Blogger API v3: list blogs/posts and create **drafts only**. Existing live posts are not overwritten.
+- Search Console query/date rows for `https://aigen023.blogspot.com/`, using actual API results or an explicit no-data/error state.
+- Optional Gemini article draft generation when a key is configured.
+- Human review checklist for references, code, word count, reproducibility, and heading structure.
+- CSV export of article metadata.
+
+## Streamlit Community Cloud setup
+
+Deploy the repository's `refactor/content-ops-hub` branch to test this refactor before switching production. In Streamlit Community Cloud, open **Manage app → Settings → Secrets** and add valid TOML. Never commit secrets or paste them into public issues.
 
 ```toml
 [auth]
@@ -34,35 +33,73 @@ allowed_email = "YOUR_GOOGLE_ACCOUNT_EMAIL"
 client_id = "YOUR_GOOGLE_OAUTH_CLIENT_ID"
 client_secret = "YOUR_NEW_ROTATED_CLIENT_SECRET"
 
+# Optional; article generation is disabled without this key.
 [gemini]
 api_key = "YOUR_GEMINI_API_KEY"
 ```
 
-The `[auth]` and `[google]` sections can use the same OAuth web client, provided the matching client ID and secret are used consistently. `[auth]` protects dashboard access; `[google]` authorizes the data APIs. Generate a unique random cookie secret. Never paste completed secrets into chat or commit them.
+Use a **newly rotated** OAuth client secret; do not reuse a secret previously exposed in chat. The same OAuth web client may be used in both `[auth]` and `[google]`, but the client ID and secret must match exactly. Generate a long random `cookie_secret`. Set `allowed_email` to the Google account allowed to use the private dashboard.
 
-AI generation is optional: if you do not configure `[gemini]`, all non-AI dashboard features can still be used. Get a Gemini API key at https://aistudio.google.com/app/apikey; check your account's current free-tier limits before use.
+## Google OAuth configuration
 
-## Google Cloud setup
-1. Enable Blogger API v3, Google Search Console API, Google Analytics Data API, and AdSense Management API if you intend to use each report.
-2. Under Google Auth Platform → Audience, add the account in `[app].allowed_email` as a test user while the OAuth app is in Testing.
-3. Add both Authorized redirect URIs to the same OAuth Web client:
-   - `https://aigen023-blog-manager.streamlit.app/oauth2callback` for Streamlit Google sign-in.
-   - `https://aigen023-blog-manager.streamlit.app/` for the app's Google API consent flow.
-4. Rotate the OAuth secret previously shared in chat. Store only the replacement in Streamlit Secrets.
-5. The authorized Google account must have access to the Blogger blog, Search Console property, GA4 property, and AdSense account respectively.
+1. In Google Cloud, enable **Blogger API v3** and **Google Search Console API**.
+2. Configure an OAuth client of type **Web application**.
+3. Add these exact **Authorized redirect URIs**:
+   - `https://aigen023-blog-manager.streamlit.app/oauth2callback` — Streamlit's Google sign-in callback.
+   - `https://aigen023-blog-manager.streamlit.app/` — Blogger/Search Console API authorization callback.
+4. If the OAuth consent screen is in **Testing**, add the owner account under **Audience → Test users**.
+5. Ensure the account has permission to manage the Blogger blog and access the Search Console property `https://aigen023.blogspot.com/`.
+6. Required API OAuth scopes:
+   - `https://www.googleapis.com/auth/blogger`
+   - `https://www.googleapis.com/auth/webmasters.readonly`
 
-## Important limitations
-- The app creates Blogger drafts only; it does not automatically publish or overwrite live posts.
-- Search Console, GA4, and AdSense reports only work when the relevant API is enabled and the Google account has permission. A missing AdSense account or unavailable API permission is reported as an error/no data, not fabricated earnings.
-- Gemini output is a draft, not verified research. Fact-check instructions, code, claims, references, and links before publishing.
-- Wikimedia Commons search results show source and license metadata, but you must check the source page's exact terms and attribution requirements.
-- Drafts and affiliate ideas are stored as local files and may be lost on Streamlit Community Cloud restarts/redeploys. Download backups; persistent storage is not implemented.
-- Do not bulk publish thin AI content, fabricate citations, or expect guaranteed AdSense approval or revenue.
+If the Blogger API returns an error, check API enablement, test-user access, matching OAuth credentials, the exact redirect URI, and the account's property permissions. Analytics and AdSense reporting are intentionally not claimed as implemented in this refactor; no estimated earnings are fabricated.
 
-## Run locally
-```bash
-python -m venv .venv
-# Windows: .venv\\Scripts\\activate
+## Run locally (Windows PowerShell)
+
+Install Python 3.11 or newer. From the repository root:
+
+```powershell
+py -3.11 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
 pip install -r requirements.txt
 streamlit run app.py
+```
+
+If PowerShell blocks activation, use `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass` in that terminal, or run `.venv\Scripts\python.exe -m streamlit run app.py` without activating the environment.
+
+## Run locally (Linux/macOS)
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+streamlit run app.py
+```
+
+The OAuth redirect URI is currently configured for the hosted app. For local Google API OAuth, create a separate local OAuth configuration and set its redirect URI to `http://localhost:8501/` before starting the local flow.
+
+## Persistence and zero-cost limitations
+
+- SQLite is stored at `content_ops.db` in the application directory by default. Set `CONTENT_OPS_DB` to choose another path. The database initializes automatically.
+- Streamlit Community Cloud's local filesystem is not a durable database service; files may be reset on redeploy/restart. Export content and keep backups. For durable, always-on persistence on a zero-cost hosted tier, there is no guarantee—local Windows/Linux SQLite is the dependable option.
+- The queue state and logs persist in SQLite, but this app does not run a hidden background scheduler. Processing is user-triggered and human review remains required.
+- AI text is not automatically fact-checked. Do not publish invented tests, terminal output, personal experience, statistics, or citations. Verify all commands and links yourself.
+- The 1,200-word check is a review hint, not a ranking rule. A longer article is not automatically useful or AdSense compliant.
+- Schema markup must accurately describe visible content and the actual published article URL. Review generated JSON-LD and validate it before production publishing.
+- Affiliate links must be disclosed clearly and use the correct relationship attributes. Confirm each program's disclosure and link requirements.
+
+## Project structure
+
+```text
+app.py
+core/
+  database.py
+property_a_blog/
+  blogger_client.py
+  seo_optimizer.py
+requirements.txt
+README.md
 ```

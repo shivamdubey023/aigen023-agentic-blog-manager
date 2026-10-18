@@ -1,583 +1,356 @@
-import html
-import json
-import re
-from datetime import date, datetime, timedelta
-from pathlib import Path
+"""NextGen Tech Notes content operations dashboard."""
+from __future__ import annotations
+import html, json, re
+from datetime import date, timedelta
+from urllib.parse import urlparse
 
-import streamlit as st
-import markdown as md
+import pandas as pd
 import requests
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import Flow
-from googleapiclient.discovery import build
-from googleapiclient.errors import HttpError
+import streamlit as st
 
-APP_DIR = Path(__file__).parent
-DATA_DIR = APP_DIR / "data"
-DRAFT_DIR = DATA_DIR / "drafts"
-DRAFT_DIR.mkdir(parents=True, exist_ok=True)
-BLOGGER_SCOPE = "https://www.googleapis.com/auth/blogger"
-SCOPES = [BLOGGER_SCOPE, "https://www.googleapis.com/auth/webmasters.readonly", "https://www.googleapis.com/auth/analytics.readonly", "https://www.googleapis.com/auth/adsense.readonly"]
-APP_URL = "https://aigen023-blog-manager.streamlit.app/"
-BLOGGER_REDIRECT_URI = APP_URL
+from core import database as db
+from property_a_blog.blogger_client import (
+    BLOG_URL, REDIRECT_URI, finish_oauth, get_credentials, list_blogs,
+    oauth_error_hint, search_console_report, start_oauth, create_draft,
+)
+from property_a_blog.seo_optimizer import affiliate_box, content_quality_checks, render_article
 
-st.set_page_config(page_title="Aigen023 Blog Manager", page_icon="✍️", layout="wide")
+st.set_page_config(page_title="NextGen Tech Notes · Content Ops", page_icon="🛠️", layout="wide")
+db.init_db()
 
+def secrets_section(name: str) -> dict:
+    try: return dict(st.secrets[name])
+    except Exception: return {}
 
-def secret_section(name):
-    try:
-        return dict(st.secrets[name])
-    except Exception:
-        return {}
-
-
-def slugify(value):
-    value = re.sub(r"[^a-zA-Z0-9\s-]", "", value.lower())
-    return re.sub(r"[\s-]+", "-", value).strip("-")[:80] or "blog-post"
-
-
-def load_drafts():
-    drafts = []
-    for path in sorted(DRAFT_DIR.glob("*.json"), reverse=True):
-        try:
-            drafts.append(json.loads(path.read_text(encoding="utf-8")))
-        except (OSError, json.JSONDecodeError):
-            continue
-    return drafts
-
-
-def save_local_draft(title, content, blog_id="", source_post_id=""):
-    draft_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-    draft = {
-        "id": draft_id,
-        "created_at": datetime.now().isoformat(timespec="seconds"),
-        "title": title.strip(),
-        "content": content,
-        "blog_id": blog_id,
-        "source_post_id": source_post_id,
-        "status": "Local draft — not published",
-    }
-    (DRAFT_DIR / f"{draft_id}.json").write_text(
-        json.dumps(draft, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    return draft
-
-
-def get_blogger_credentials():
-    token_data = st.session_state.get("blogger_token")
-    if not token_data:
-        return None
-    try:
-        creds = Credentials.from_authorized_user_info(token_data, SCOPES)
-        if creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-            st.session_state["blogger_token"] = json.loads(creds.to_json())
-        return creds if creds.valid else None
-    except Exception:
-        st.session_state.pop("blogger_token", None)
-        return None
-
-
-def blogger_service():
-    creds = get_blogger_credentials()
-    if not creds or not creds.valid:
-        return None
-    return build("blogger", "v3", credentials=creds, cache_discovery=False)
-
-
-def connect_blogger():
-    google = secret_section("google")
-    if not google.get("client_id") or not google.get("client_secret"):
-        st.error("Missing [google] client_id/client_secret in Streamlit Secrets.")
-        return
-    flow = Flow.from_client_config(
-        {
-            "web": {
-                "client_id": google["client_id"],
-                "client_secret": google["client_secret"],
-                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                "token_uri": "https://oauth2.googleapis.com/token",
-                "redirect_uris": [BLOGGER_REDIRECT_URI],
-            }
-        },
-        scopes=SCOPES,
-        redirect_uri=BLOGGER_REDIRECT_URI,
-    )
-    auth_url, state = flow.authorization_url(
-        access_type="offline",
-        include_granted_scopes="true",
-        prompt="consent",
-    )
-    st.session_state["blogger_oauth_state"] = state
-    st.session_state["blogger_oauth_flow"] = {
-        "state": state,
-        "client_id": google["client_id"],
-        "client_secret": google["client_secret"],
-    }
-    st.link_button("Continue to Google authorization", auth_url)
-
-
-def handle_blogger_callback():
-    # Do not consume the OIDC callback used by st.login(). This handler is
-    # only for a Blogger authorization flow started from this session.
-    oauth_state = st.session_state.get("blogger_oauth_state")
-    if not oauth_state:
-        return
-    code = st.query_params.get("code")
-    state = st.query_params.get("state")
-    if not code:
-        return
-    if not state or state != oauth_state:
-        st.error("OAuth state did not match. For safety, restart the Blogger connection.")
-        st.query_params.clear()
-        return
-    cfg = st.session_state.get("blogger_oauth_flow", {})
-    flow = Flow.from_client_config(
-        {
-            "web": {
-                "client_id": cfg.get("client_id", ""),
-                "client_secret": cfg.get("client_secret", ""),
-                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                "token_uri": "https://oauth2.googleapis.com/token",
-                "redirect_uris": [BLOGGER_REDIRECT_URI],
-            }
-        },
-        scopes=SCOPES,
-        state=oauth_state,
-        redirect_uri=BLOGGER_REDIRECT_URI,
-    )
-    try:
-        flow.fetch_token(code=code)
-        creds = flow.credentials
-        st.session_state["blogger_token"] = json.loads(creds.to_json())
-        st.session_state.pop("blogger_oauth_state", None)
-        st.session_state.pop("blogger_oauth_flow", None)
-        st.query_params.clear()
-        st.success("Blogger connected for this browser session.")
-        st.rerun()
-    except Exception as exc:
-        st.query_params.clear()
-        st.error(f"Google authorization failed: {exc}")
-
-
-def generate_article(topic, audience, tone, keywords, notes):
-    api_key = secret_section("gemini").get("api_key", "")
-    if not api_key:
-        raise ValueError("Add [gemini] api_key to Streamlit Secrets. Get a key from https://aistudio.google.com/app/apikey.")
-    prompt = (
-        "Write a practical, accurate technology article for NextGen Tech Notes.\n"
-        f"Topic: {topic}\nAudience: {audience}\nStyle: {tone}\nSEO phrases: {keywords or 'none'}\n"
-        f"Owner notes: {notes or 'none supplied'}\n\n"
-        "Return Markdown only, starting with one H1. Include actionable steps, examples, troubleshooting and conclusion. "
-        "Never invent tests, personal experience, stats, sources, or URLs. Mark uncertain claims [VERIFY]. Avoid filler and keyword stuffing."
-    )
-    response = requests.post(
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
-        params={"key": api_key},
-        json={"contents": [{"parts": [{"text": prompt}]}],
-              "generationConfig": {"temperature": 0.55, "maxOutputTokens": 6500}},
-        timeout=90,
-    )
-    if not response.ok:
-        raise RuntimeError(f"Gemini API returned HTTP {response.status_code}: {response.text[:500]}")
-    data = response.json()
-    try:
-        return data["candidates"][0]["content"]["parts"][0]["text"].strip()
-    except (KeyError, IndexError, TypeError):
-        raise RuntimeError("Gemini returned no article text. Check API access.")
-
-
-def search_commons(query, limit=12):
-    response = requests.get(
-        "https://commons.wikimedia.org/w/api.php",
-        params={"action": "query", "format": "json", "generator": "search",
-                "gsrsearch": f"filetype:bitmap {query}", "gsrnamespace": 6,
-                "gsrlimit": limit, "prop": "imageinfo", "iiprop": "url|extmetadata",
-                "iiurlwidth": 900},
-        headers={"User-Agent": "Aigen023BlogManager/1.0"},
-        timeout=25,
-    )
-    response.raise_for_status()
-    pages = response.json().get("query", {}).get("pages", {})
-    results = []
-    for item in pages.values():
-        info = (item.get("imageinfo") or [{}])[0]
-        meta = info.get("extmetadata", {})
-        def plain(name, default):
-            value = meta.get(name, {}).get("value", default)
-            return re.sub(r"<[^>]+>", "", str(value))
-        image_url = info.get("thumburl") or info.get("url", "")
-        page_url = info.get("descriptionurl", "")
-        if image_url and page_url:
-            results.append({"title": item.get("title", "").replace("File:", ""),
-                            "image_url": image_url, "page_url": page_url,
-                            "license": plain("LicenseShortName", "Check license"),
-                            "artist": plain("Artist", "Author not listed")})
-    return results
-
-
-def article_html(markdown_text, image=None):
-    body = md.markdown(markdown_text, extensions=["extra", "sane_lists"])
-    if image:
-        img = html.escape(image["image_url"], quote=True)
-        alt = html.escape(image["title"], quote=True)
-        src = html.escape(image["page_url"], quote=True)
-        credit = html.escape(f"{image['title']} — {image['artist']} ({image['license']})")
-        body = f'<figure><img src="{img}" alt="{alt}" style="max-width:100%;height:auto"><figcaption>{credit} · <a href="{src}" rel="nofollow">Source and license</a></figcaption></figure>' + body
-    return body
-
-
-def search_console_rows(creds, site_url, start, end):
-    api = build("searchconsole", "v1", credentials=creds, cache_discovery=False)
-    result = api.searchanalytics().query(
-        siteUrl=site_url,
-        body={"startDate": start.isoformat(), "endDate": end.isoformat(),
-              "dimensions": ["date"], "rowLimit": 30},
-    ).execute()
-    return result.get("rows", [])
-
-
-def ga4_report(creds, property_id, start, end):
-    api = build("analyticsdata", "v1beta", credentials=creds, cache_discovery=False)
-    prop = property_id.strip().replace("properties/", "")
-    return api.properties().runReport(
-        property=f"properties/{prop}",
-        body={"dateRanges": [{"startDate": start.isoformat(), "endDate": end.isoformat()}],
-              "metrics": [{"name": "screenPageViews"}, {"name": "sessions"}, {"name": "activeUsers"}]},
-    ).execute()
-
-
-def adsense_report(creds, start, end):
-    api = build("adsense", "v2", credentials=creds, cache_discovery=False)
-    accounts = api.accounts().list(pageSize=100).execute().get("accounts", [])
-    if not accounts:
-        return [], None
-    report = api.accounts().reports().generate(
-        account=accounts[0]["name"], dateRange="CUSTOM",
-        startDate_year=start.year, startDate_month=start.month, startDate_day=start.day,
-        endDate_year=end.year, endDate_month=end.month, endDate_day=end.day,
-        metrics=["ESTIMATED_EARNINGS", "PAGE_VIEWS", "IMPRESSIONS", "CLICKS"],
-        currencyCode="INR",
-    ).execute()
-    return accounts, report
-
-
-def gate_app():
-    auth = secret_section("auth")
-    app_cfg = secret_section("app")
-    required = ["redirect_uri", "cookie_secret", "client_id", "client_secret", "server_metadata_url"]
-    missing = [f"auth.{key}" for key in required if not auth.get(key)]
-    if not app_cfg.get("allowed_email"):
-        missing.append("app.allowed_email")
+def owner_gate() -> str:
+    auth, app_cfg = secrets_section("auth"), secrets_section("app")
+    required = ["redirect_uri","cookie_secret","client_id","client_secret","server_metadata_url"]
+    missing = [f"auth.{x}" for x in required if not auth.get(x)]
+    if not app_cfg.get("allowed_email"): missing.append("app.allowed_email")
     if missing:
-        st.title("✍️ Aigen023 Blog Manager")
-        st.error("App access is locked until authentication is configured.")
-        st.markdown("In Streamlit **Manage app → Settings → Secrets**, paste the complete TOML configuration from the repository README. Google Cloud redirect URI settings alone do not configure Streamlit Secrets.")
-        st.write("**Missing settings detected (values are not shown):**")
-        for item in missing:
-            st.code(item)
-        st.markdown("[Open setup instructions](https://github.com/shivamdubey023/aigen023-agentic-blog-manager#required-streamlit-secrets)")
+        st.title("NextGen Tech Notes · Content Ops")
+        st.error("Owner sign-in is not configured. Add the required values in Streamlit Manage app → Settings → Secrets.")
+        st.write("Missing keys (values are never displayed):")
+        st.code("\n".join(missing))
         st.stop()
     if not st.user.is_logged_in:
-        st.title("✍️ Aigen023 Blog Manager")
-        st.write("Private owner dashboard. Sign in with your Google account to continue.")
+        st.title("NextGen Tech Notes · Content Ops")
+        st.write("Private dashboard for managing technical article drafts.")
         st.button("Sign in with Google", on_click=st.login, type="primary")
         st.stop()
-    signed_email = str(getattr(st.user, "email", "") or "").lower()
-    allowed_email = str(app_cfg.get("allowed_email", "")).strip().lower()
-    if not allowed_email or signed_email != allowed_email:
-        st.error("This Google account is not authorized to use this dashboard.")
+    email = str(getattr(st.user,"email","") or "").strip().lower()
+    if email != str(app_cfg.get("allowed_email","")).strip().lower():
+        st.error("This Google account is not authorized for this dashboard.")
         st.button("Sign out", on_click=st.logout)
         st.stop()
-    return signed_email
+    return email
 
+owner = owner_gate()
+st.title("🛠️ NextGen Tech Notes")
+st.caption("Content operations · human review required · Blogger drafts only")
+creds = get_credentials(st.session_state)
+# Process the Blogger/Search Console OAuth callback only when a flow was started here.
+if st.query_params.get("code") and st.session_state.get("google_api_oauth_state"):
+    try:
+        finish_oauth(st.query_params.get("code",""),st.query_params.get("state",""),st.session_state)
+        st.query_params.clear()
+        st.rerun()
+    except Exception as exc:
+        st.error(f"Google API authorization failed: {oauth_error_hint(exc)}")
+        st.query_params.clear()
+creds = get_credentials(st.session_state)
 
-handle_blogger_callback()
-owner_email = gate_app()
-
-st.title("✍️ Aigen023 Agentic Blog Manager")
-st.caption("NextGen Tech Notes · Blogger · SEO · AdSense · Affiliate planning")
 with st.sidebar:
-    st.success(f"Signed in: {owner_email}")
-    if st.button("Sign out"):
-        st.logout()
+    st.success(f"Signed in: {owner}")
+    if st.button("Sign out", key="owner_signout"): st.logout()
     st.divider()
-    st.write("**Blogger connection**")
-    if get_blogger_credentials():
-        st.success("Connected for this browser session")
-        if st.button("Disconnect Blogger"):
-            st.session_state.pop("blogger_token", None)
+    st.metric("Google API connection", "Connected" if creds else "Not connected")
+    st.caption("The Google API token is held in the current browser session, not committed to source control.")
+
+tabs = st.tabs(["Queue & Automation","Editor & Publisher","Content Repository","Search Console & AdSense","Settings & OAuth"])
+
+with tabs[0]:
+    st.subheader("Queue & automation")
+    state = db.queue_state()
+    st.write("Queue status:", "🟢 RUNNING" if state=="RUNNING" else "⏸️ PAUSED")
+    c1,c2,c3 = st.columns(3)
+    c1.metric("Saved articles",len(db.list_articles()))
+    c2.metric("Queued",sum(1 for a in db.list_articles() if a["status"]=="QUEUED"))
+    c3.metric("Queue items",len(db.queue_rows()))
+    b1,b2,b3 = st.columns(3)
+    if b1.button("Start queue", type="primary"):
+        db.set_queue_state("RUNNING")
+        st.rerun()
+    if b2.button("Pause queue"):
+        db.set_queue_state("PAUSED")
+        st.rerun()
+    if b3.button("Restart queue"):
+        db.restart_queue()
+        st.rerun()
+    st.caption("No unattended publishing occurs. Queue execution is user-triggered so every article stays reviewable.")
+    queue = db.queue_rows()
+    if queue:
+        st.dataframe(pd.DataFrame(queue)[[c for c in ["id","title","topic","state","retry_count","max_retries","updated_at"] if c in queue[0]]],use_container_width=True,hide_index=True)
+        batch_size=st.number_input("Batch size (queued items to prepare for human review)",min_value=1,max_value=25,value=5,step=1)
+        if st.button("Process batch → prepare drafts for review"):
+            candidates=[x for x in queue if x.get("state")=="RUNNING" and x.get("article_id") and x.get("article_status")=="QUEUED"][:int(batch_size)]
+            if not candidates:
+                st.info("No RUNNING queue items linked to QUEUED articles. Start/restart the queue and add articles first.")
+            else:
+                processed=0
+                for item in candidates:
+                    article=db.get_article(item["article_id"])
+                    if not article: 
+                        db.log_queue_event(item["id"],"Skipped: article record missing",retry=True,state="PAUSED")
+                        continue
+                    try:
+                        rendered,schema=render_article(article["markdown_body"],article["title"],article["primary_keyword"])
+                        db.save_article(topic=article["topic"],primary_keyword=article["primary_keyword"],title=article["title"],
+                          markdown_body=article["markdown_body"],rendered_html=rendered,schema_json=schema,status="DRAFT",
+                          article_id=article["id"],blogger_post_id=article["blogger_post_id"],blogger_blog_id=article["blogger_blog_id"])
+                        db.log_queue_event(item["id"],"Batch prepared article for human review",state="PAUSED")
+                        processed+=1
+                    except Exception as exc:
+                        db.log_queue_event(item["id"],f"Batch processing error: {exc}",retry=True,state="PAUSED")
+                st.success(f"Prepared {processed} draft(s) for review. Nothing was published.")
+                st.rerun()
+        choices = {f"#{x['id']} · {x.get('title') or x.get('topic') or 'Untitled'}":x for x in queue}
+        chosen_label=st.selectbox("Queue item",list(choices),key="queue_selected")
+        selected=choices[chosen_label]
+        if st.button("Process next item (prepare for review)"):
+            article = db.get_article(selected["article_id"]) if selected.get("article_id") else None
+            if not article:
+                db.log_queue_event(selected["id"],"Skipped: article record missing",retry=True,state="PAUSED")
+                st.warning("Queue item has no linked article.")
+            else:
+                db.set_article_status(article["id"],"DRAFT")
+                db.log_queue_event(selected["id"],"Prepared draft for human review",state="PAUSED")
+                st.success("Article returned to DRAFT for review. No automatic publishing was performed.")
+            st.rerun()
+    else: st.info("Queue is empty. Save an article from the editor and choose Add to queue.")
+
+with tabs[1]:
+    st.subheader("Technical article editor")
+    with st.form("article_editor_form"):
+        topic=st.text_input("Topic",placeholder="e.g. Debugging Django database connection errors")
+        keyword=st.text_input("Primary keyword",placeholder="e.g. Django PostgreSQL connection error")
+        title=st.text_input("Article title")
+        audience=st.selectbox("Reader level",["Beginner","Student / fresher","Working developer","Senior engineer"])
+        notes=st.text_area("First-hand notes, test results, environment and references (important)",height=100)
+        use_ai=st.checkbox("Generate a draft with Gemini (requires [gemini].api_key)")
+        make_article=st.form_submit_button("Create article draft",type="primary")
+    if make_article:
+        if not topic.strip(): st.error("Enter a topic.")
+        else:
+            try:
+                if use_ai:
+                    key=secrets_section("gemini").get("api_key","")
+                    if not key: raise ValueError("Missing [gemini].api_key in Streamlit Secrets.")
+                    prompt=f"""Write a deep, practical technical tutorial for NextGen Tech Notes.
+Topic: {topic}
+Primary keyword: {keyword}
+Reader: {audience}
+Author notes and evidence (use only as supplied; flag gaps): {notes or 'None supplied'}
+Write at least 1,200 substantive words without padding or generic introductory filler. Explain prerequisites,
+version assumptions, exact steps, reproducible code, commands and expected output, failure modes,
+troubleshooting, security caveats, and relevant official documentation URLs only when confident.
+Include a representative terminal traceback for a relevant failure when technically useful, label it as an example,
+and never imply it was observed in a real run. Include a syntax-valid corrected example and verification steps.
+Never claim you ran tests or have personal experience. Never invent real test results, metrics, citations, or URLs.
+Use Markdown, one H1 followed by meaningful H2/H3 sections, and finish with a verification checklist and references to verify.
+Mark unsupported facts [VERIFY]. Output article Markdown only."""
+                    resp=requests.post("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+                        params={"key":key},json={"contents":[{"parts":[{"text":prompt}]}],
+                        "generationConfig":{"temperature":0.35,"maxOutputTokens":8000}},timeout=90)
+                    if not resp.ok: raise RuntimeError(f"Gemini HTTP {resp.status_code}: {resp.text[:350]}")
+                    draft=resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+                    title = title.strip() or next((x[2:].strip() for x in draft.splitlines() if x.startswith("# ")),topic)
+                else:
+                    draft=f"# {title.strip() or topic}\n\n## Prerequisites\n\nDescribe the tested environment and versions.\n\n## Steps\n\nAdd reproducible steps, code, expected output, and troubleshooting based on your own verification.\n\n## Verification\n\nRecord commands run and observed results.\n\n## References\n\nAdd official documentation links you have checked.\n"
+                rendered,schema=render_article(draft,title or topic,keyword,description=f"Practical technical tutorial: {title or topic}.")
+                article_id=db.save_article(topic=topic,primary_keyword=keyword,title=title or topic,markdown_body=draft,
+                    rendered_html=rendered,schema_json=schema,status="DRAFT")
+                st.session_state["active_article_id"]=article_id
+                st.session_state["editor_markdown"]=draft
+                st.session_state["editor_title"]=title or topic
+                st.session_state["editor_topic"]=topic
+                st.session_state["editor_keyword"]=keyword
+                st.success(f"Saved article #{article_id} to SQLite. Continue reviewing below.")
+            except Exception as exc: st.error(f"Could not create draft: {exc}")
+    saved = db.get_article(st.session_state.get("active_article_id",0)) if st.session_state.get("active_article_id") else None
+    default_md = st.session_state.get("editor_markdown",saved["markdown_body"] if saved else "")
+    edited_title=st.text_input("Edit title",value=st.session_state.get("editor_title",saved["title"] if saved else ""),key="editor_title_field")
+    edited_md=st.text_area("Markdown editor",value=default_md,height=380,key="editor_markdown_field")
+    c1,c2,c3=st.columns(3)
+    include_toc=c1.checkbox("Generate table of contents",value=True)
+    affiliate_entries=db.list_affiliates()
+    aff_labels=["No affiliate box"]+[f"{x['product_name']} (#{x['id']})" for x in affiliate_entries]
+    selected_aff=c2.selectbox("Affiliate box",aff_labels)
+    primary_keyword=st.session_state.get("editor_keyword","")
+    if c3.button("Render preview"):
+        st.session_state["preview_ready"]=True
+    affiliate_html=""
+    if selected_aff!="No affiliate box":
+        af=affiliate_entries[aff_labels.index(selected_aff)-1]
+        try: affiliate_html=affiliate_box(af["product_name"],af["tracking_url"],af["disclosure_snippet"])
+        except ValueError as exc: st.error(str(exc))
+    rendered,schema=render_article(edited_md,edited_title,primary_keyword,include_toc=include_toc,affiliate_html=affiliate_html)
+    warnings=content_quality_checks(edited_title,edited_md)
+    if warnings:
+        with st.expander(f"Editorial review checklist ({len(warnings)} items)",expanded=True):
+            for warning in warnings: st.warning(warning)
+    if st.session_state.get("preview_ready",False):
+        st.markdown("#### Preview")
+        st.markdown(edited_md)
+        st.caption("Preview shows Markdown; Blogger HTML includes generated heading IDs and structured data.")
+    colsave,colqueue=st.columns(2)
+    if colsave.button("Save edits to repository",type="primary"):
+        try:
+            article_id=db.save_article(topic=st.session_state.get("editor_topic",""),primary_keyword=primary_keyword,
+                title=edited_title,markdown_body=edited_md,rendered_html=rendered,schema_json=schema,
+                status="DRAFT",article_id=saved["id"] if saved else None)
+            st.session_state["active_article_id"]=article_id
+            st.success(f"Saved draft #{article_id}.")
+        except Exception as exc: st.error(str(exc))
+    if colqueue.button("Save and add to queue"):
+        try:
+            article_id=db.save_article(topic=st.session_state.get("editor_topic",""),primary_keyword=primary_keyword,
+                title=edited_title,markdown_body=edited_md,rendered_html=rendered,schema_json=schema,status="QUEUED",
+                article_id=saved["id"] if saved else None)
+            db.queue_article(article_id)
+            st.session_state["active_article_id"]=article_id
+            st.success(f"Article #{article_id} added to the human-review queue.")
+        except Exception as exc: st.error(str(exc))
+    st.divider()
+    st.subheader("Create a Blogger draft")
+    if not creds:
+        st.info("Connect Google API access in Settings & OAuth to upload drafts.")
+    else:
+        try: blogs=list_blogs(creds)
+        except Exception as exc:
+            blogs=[]; st.error(str(exc))
+        target_options={f"{b.get('name','Untitled')} · {b.get('url','')}":b for b in blogs}
+        if target_options:
+            target_label=st.selectbox("Blogger target",list(target_options),key="publisher_blog")
+            confirm=st.checkbox("I reviewed the article, code, links, schema, and image/affiliate disclosures.",key="publish_reviewed")
+            if st.button("Upload as Blogger draft (not published)",disabled=not confirm):
+                try:
+                    rendered,schema=render_article(edited_md,edited_title,primary_keyword,include_toc=include_toc,affiliate_html=affiliate_html)
+                    created=create_draft(creds,target_options[target_label]["id"],edited_title,rendered)
+                    article_id=db.save_article(topic=st.session_state.get("editor_topic",""),primary_keyword=primary_keyword,
+                      title=edited_title,markdown_body=edited_md,rendered_html=rendered,schema_json=schema,status="DRAFT",
+                      article_id=saved["id"] if saved else None,blogger_post_id=created.get("id",""),
+                      blogger_blog_id=target_options[target_label]["id"])
+                    st.success(f"Created Blogger draft. Post ID: {created.get('id','(not returned)')}")
+                    if created.get("url"): st.link_button("Open Blogger post",created["url"])
+                except Exception as exc: st.error(f"Blogger upload failed: {exc}")
+        else: st.info("No Blogger blogs returned for this account.")
+
+with tabs[2]:
+    st.subheader("SQLite content repository")
+    articles=db.list_articles()
+    if articles:
+        df=pd.DataFrame([{k:a.get(k) for k in ["id","topic","primary_keyword","title","status","blogger_post_id","created_at","updated_at"]} for a in articles])
+        st.dataframe(df,use_container_width=True,hide_index=True)
+        ids={f"#{a['id']} · {a['title'] or a['topic']}":a["id"] for a in articles}
+        selected=st.selectbox("Load an article for editing",list(ids),key="repository_load")
+        chosen_article=db.get_article(ids[selected])
+        action1,action2=st.columns(2)
+        if action1.button("Review / Edit selected article"):
+            st.session_state["active_article_id"]=chosen_article["id"]
+            st.session_state["editor_markdown"]=chosen_article["markdown_body"]
+            st.session_state["editor_title"]=chosen_article["title"]
+            st.session_state["editor_topic"]=chosen_article["topic"]
+            st.session_state["editor_keyword"]=chosen_article["primary_keyword"]
+            st.success("Loaded. Open Editor & Publisher tab.")
+        if action2.button("Pause selected article"):
+            db.set_article_status(chosen_article["id"],"PAUSED")
+            st.success("Article paused.")
+            st.rerun()
+        if creds:
+            try:
+                repost_blogs=list_blogs(creds)
+            except Exception as exc:
+                repost_blogs=[]
+                st.warning(f"Could not load Blogger blogs for reposting: {exc}")
+            if repost_blogs:
+                repost_options={f"{b.get('name','Untitled')} · {b.get('url','')}":b for b in repost_blogs}
+                repost_target=st.selectbox("Repost destination (creates a new Blogger draft)",list(repost_options),key="repost_target")
+                repost_confirm=st.checkbox("Confirm creating a separate new Blogger draft; do not replace the original.",key="repost_confirm")
+                if st.button("Repost as new Blogger draft",disabled=not repost_confirm):
+                    try:
+                        rendered,_=render_article(chosen_article["markdown_body"],chosen_article["title"],chosen_article["primary_keyword"])
+                        created=create_draft(creds,repost_options[repost_target]["id"],chosen_article["title"],rendered)
+                        db.save_article(topic=chosen_article["topic"],primary_keyword=chosen_article["primary_keyword"],
+                          title=chosen_article["title"],markdown_body=chosen_article["markdown_body"],rendered_html=rendered,
+                          status="DRAFT",blogger_post_id=created.get("id",""),blogger_blog_id=repost_options[repost_target]["id"])
+                        st.success(f"Created separate Blogger draft. Post ID: {created.get('id','not returned')}")
+                    except Exception as exc: st.error(f"Repost failed: {exc}")
+        export=st.download_button("Export repository CSV",df.to_csv(index=False),file_name="nextgen-tech-notes-articles.csv",mime="text/csv")
+    else: st.info("No articles saved yet.")
+
+with tabs[3]:
+    st.subheader("Search Console & AdSense status")
+    st.caption("Only API-returned data is shown. No metrics are estimated or fabricated.")
+    start=st.date_input("Start date",value=date.today()-timedelta(days=28),key="sc_start")
+    end=st.date_input("End date",value=date.today()-timedelta(days=3),key="sc_end")
+    if start>end: st.error("Start date must be on or before end date.")
+    elif not creds: st.info("Connect Google API access in Settings & OAuth.")
+    else:
+        if st.button("Fetch Search Console metrics"):
+            try:
+                report=search_console_report(creds,start,end,site_url=BLOG_URL,dimensions=["date","query"],row_limit=1000)
+                rows=report.get("rows",[])
+                if rows:
+                    frame=pd.DataFrame([{"date":r.get("keys",[""])[0],"query":r.get("keys",["",""])[1] if len(r.get("keys",[]))>1 else "",
+                        "clicks":r.get("clicks",0),"impressions":r.get("impressions",0),"ctr":r.get("ctr",0),
+                        "average_position":r.get("position",0)} for r in rows])
+                    st.dataframe(frame,use_container_width=True,hide_index=True)
+                    st.metric("Clicks",int(frame["clicks"].sum()))
+                    st.metric("Impressions",int(frame["impressions"].sum()))
+                    st.caption("Average position is a weighted aggregate only if recomputed using impressions; row values above are the API's query rows.")
+                else: st.info("Search Console returned no rows for this period/property. Verify property ownership and date availability.")
+            except Exception as exc: st.error(f"Search Console data unavailable: {exc}")
+        st.divider()
+        st.markdown("**AdSense**")
+        st.info("AdSense metrics are not implemented in this build. No revenue figures are displayed. Add AdSense Management API reporting only after the account and API permissions are verified.")
+
+with tabs[4]:
+    st.subheader("Settings & OAuth token lifecycle")
+    st.write("Publication target:",BLOG_URL)
+    st.write("OAuth callback:",REDIRECT_URI)
+    st.write("Required Google API scopes:")
+    st.code("https://www.googleapis.com/auth/blogger\nhttps://www.googleapis.com/auth/webmasters.readonly")
+    google=secrets_section("google")
+    if creds:
+        st.success("Google API OAuth token is valid for the current browser session.")
+        if st.button("Disconnect Google APIs"):
+            st.session_state.pop("google_api_token",None)
+            st.session_state.pop("google_api_oauth_state",None)
+            st.session_state.pop("google_api_oauth_client",None)
             st.rerun()
     else:
-        st.info("Not connected")
-    st.caption("Credentials and tokens are not written to source files.")
-
-try:
-    handle_blogger_callback()
-except Exception:
-    pass
-
-service = blogger_service()
-blogs = []
-blog_error = None
-if service:
-    try:
-        blogs = service.blogs().listByUser(userId="self").execute().get("items", [])
-    except HttpError as exc:
-        blog_error = str(exc)
-
-tab_dashboard, tab_posts, tab_editor, tab_metrics, tab_seo, tab_affiliate, tab_setup = st.tabs(
-    ["Dashboard", "Blogger posts", "AI article + image", "Analytics", "SEO & AdSense", "Affiliate planner", "Setup"]
-)
-
-with tab_dashboard:
-    drafts = load_drafts()
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Local drafts", len(drafts))
-    c2.metric("Blogger connection", "Connected" if service else "Not connected")
-    c3.metric("Blogs found", len(blogs) if service else "—")
-    c4.metric("Live analytics", "Not connected")
-    st.info("Live views, Search Console clicks, and AdSense earnings are not connected yet. Do not interpret estimates as actual earnings.")
-    st.subheader("Recent local drafts")
-    if drafts:
-        for draft in drafts[:8]:
-            st.write(f"**{draft.get('title', 'Untitled')}** · {draft.get('created_at', '')} · {draft.get('status', '')}")
-    else:
-        st.write("No local drafts yet.")
-    if blog_error:
-        st.error(f"Blogger API error: {blog_error}")
-
-with tab_posts:
-    st.subheader("Your Blogger posts")
-    if not service:
-        st.info("Connect Blogger in the Setup tab first.")
-    elif blog_error:
-        st.error(blog_error)
-    elif not blogs:
-        st.warning("No Blogger blogs were returned for the authorized Google account.")
-    else:
-        blog_options = {f"{b.get('name', 'Untitled blog')} · {b.get('url', '')}": b for b in blogs}
-        chosen_blog_label = st.selectbox("Choose a blog", list(blog_options))
-        chosen_blog = blog_options[chosen_blog_label]
-        try:
-            post_response = service.posts().list(
-                blogId=chosen_blog["id"], fetchBodies=True, maxResults=30, status=["LIVE", "DRAFT"]
-            ).execute()
-            posts = post_response.get("items", [])
-            st.caption(f"Showing up to 30 posts from {chosen_blog.get('name', 'your blog')}.")
-            if not posts:
-                st.info("No posts returned.")
-            for post in posts:
-                status = "Draft" if post.get("status") == "DRAFT" else "Published"
-                with st.expander(f"{post.get('title', 'Untitled')} · {status}"):
-                    st.caption(f"Updated: {post.get('updated', 'unknown')} · Post ID: {post.get('id', '')}")
-                    st.markdown(post.get("content", ""))
-                    st.download_button(
-                        "Download post HTML",
-                        post.get("content", ""),
-                        file_name=f"{slugify(post.get('title', 'post'))}.html",
-                        mime="text/html",
-                        key=f"download_{post.get('id')}",
-                    )
-                    if st.button("Load into revision editor", key=f"revise_{post.get('id')}"):
-                        st.session_state["revision_title"] = f"Updated: {post.get('title', '')}"
-                        st.session_state["revision_content"] = post.get("content", "")
-                        st.session_state["revision_blog_id"] = chosen_blog["id"]
-                        st.session_state["revision_source_post_id"] = post.get("id", "")
-                        st.session_state["revision_blog_name"] = chosen_blog.get("name", "")
-                        st.toast("Loaded into the draft editor. Original post remains unchanged.")
-        except HttpError as exc:
-            st.error(f"Could not load posts: {exc}")
-
-with tab_editor:
-    st.subheader("Automatic article creation + image selector")
-    st.caption("AI requires a Gemini API key in Streamlit Secrets. Image search uses Wikimedia Commons; review license and attribution before uploading.")
-    with st.form("article_generator"):
-        topic = st.text_input("Article topic", placeholder="e.g. Django GraphQL troubleshooting")
-        audience = st.selectbox("Target reader", ["Beginner", "College student / fresher", "Working developer", "Technical lead"])
-        tone = st.selectbox("Article style", ["Practical tutorial", "Friendly technical explainer", "Troubleshooting guide", "Comparison with trade-offs"])
-        keywords = st.text_input("SEO phrases (optional)")
-        notes = st.text_area("Your notes or tests (optional)", height=90)
-        generate = st.form_submit_button("Generate article with Gemini", type="primary")
-    if generate:
-        if not topic.strip():
-            st.error("Enter a topic.")
-        else:
+        st.warning("Google API access is not connected.")
+        if st.button("Connect Blogger + Search Console",type="primary"):
             try:
-                with st.spinner("Generating draft…"):
-                    draft_text = generate_article(topic, audience, tone, keywords, notes)
-                st.session_state["generated_article"] = draft_text
-                st.session_state["generated_title"] = next((line[2:].strip() for line in draft_text.splitlines() if line.startswith("# ")), topic)
-                st.success("Draft generated. Check facts, commands, references, and examples before publishing.")
-            except Exception as exc:
-                st.error(str(exc))
-    article = st.text_area("Edit article Markdown", value=st.session_state.get("generated_article", ""), height=380, key="generated_article_editor")
-    title = st.text_input("Blogger title", value=st.session_state.get("generated_title", ""), key="generated_article_title")
-    image_query = st.text_input("Image search phrase", key="commons_query")
-    if st.button("Search Wikimedia Commons images"):
-        if not image_query.strip():
-            st.warning("Enter an image search phrase.")
-        else:
-            try:
-                with st.spinner("Searching images…"):
-                    st.session_state["commons_results"] = search_commons(image_query)
-            except Exception as exc:
-                st.error(f"Image search failed: {exc}")
-    image_results = st.session_state.get("commons_results", [])
-    selected_image = None
-    if image_results:
-        labels = [f"{i+1}. {x['title']} — {x['license']}" for i, x in enumerate(image_results)]
-        chosen = st.selectbox("Choose an image", labels, key="commons_selected")
-        selected_image = image_results[labels.index(chosen)]
-        st.image(selected_image["image_url"], caption=f"{selected_image['title']} · {selected_image['license']} · {selected_image['artist']}")
-        st.markdown(f"[View source and license]({selected_image['page_url']})")
-        st.session_state["selected_commons_image"] = selected_image
-    if st.button("Save local draft"):
-        if not title.strip() or len(article.strip()) < 100:
-            st.error("Add a title and substantive content.")
-        else:
-            draft_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-            payload = {"id": draft_id, "created_at": datetime.now().isoformat(timespec="seconds"),
-                       "title": title.strip(), "article_markdown": article,
-                       "image": selected_image, "status": "Local draft — review required"}
-            (DRAFT_DIR / f"{draft_id}.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-            st.success(f"Saved local draft {draft_id}. Download important drafts; hosted local files may not persist.")
-            st.download_button("Download Markdown", article, file_name=f"{slugify(title)}.md", mime="text/markdown")
-    if st.button("Prepare Blogger upload", type="primary", disabled=not bool(service and blogs)):
-        if not title.strip() or len(article.strip()) < 100:
-            st.error("Add a title and substantive content.")
-        else:
-            st.session_state["pending_upload"] = {"title": title.strip(), "article": article, "image": selected_image}
-    pending = st.session_state.get("pending_upload")
-    if pending and service and blogs:
-        blog_map = {f"{b.get('name','Blog')} · {b.get('url','')}": b for b in blogs}
-        target = st.selectbox("Target Blogger blog", list(blog_map), key="upload_blog_target")
-        confirm = st.checkbox("I reviewed this article and the image license; create a Blogger draft.", key="upload_review_confirm")
-        if st.button("Confirm upload as Blogger draft", disabled=not confirm):
-            try:
-                content = article_html(pending["article"], pending.get("image"))
-                created = service.posts().insert(
-                    blogId=blog_map[target]["id"],
-                    body={"kind": "blogger#post", "title": pending["title"], "content": content},
-                    isDraft=True,
-                ).execute()
-                st.success(f"Uploaded Blogger draft: {created.get('title', pending['title'])}")
-                if created.get("url"):
-                    st.link_button("Open Blogger post", created["url"])
-                st.session_state.pop("pending_upload", None)
-            except HttpError as exc:
-                st.error(f"Blogger upload failed: {exc}")
-
-with tab_metrics:
-    st.subheader("Search Console, GA4, and AdSense reports")
-    st.caption("Enable the relevant Google APIs and grant the scopes when connecting. Actual data appears only if your account has access to the property.")
-    today = date.today()
-    start = st.date_input("Start date", value=today - timedelta(days=28), key="report_start")
-    end = st.date_input("End date", value=today - timedelta(days=3), key="report_end")
-    site_url = st.text_input("Search Console property URL", value="https://aigen023.blogspot.com/")
-    property_id = st.text_input("GA4 property ID (numeric)", placeholder="123456789")
-    if st.button("Load Search Console clicks and impressions", disabled=not bool(creds)):
-        try:
-            if start > end:
-                st.error("Start date must not be after end date.")
-            else:
-                rows = search_console_rows(creds, site_url, start, end)
-                st.session_state["sc_report_rows"] = rows
-                st.success(f"Loaded {len(rows)} Search Console rows.")
-        except Exception as exc:
-            st.error(f"Search Console API error: {exc}")
-    if "sc_report_rows" in st.session_state:
-        rows = st.session_state["sc_report_rows"]
-        st.dataframe(rows, use_container_width=True)
-        st.download_button("Download Search Console CSV", __import__("pandas").DataFrame(rows).to_csv(index=False), "search_console.csv", "text/csv")
-    if st.button("Load GA4 pageviews, sessions, and users", disabled=not bool(creds)):
-        try:
-            if not property_id.strip():
-                st.error("Enter your GA4 property ID.")
-            elif start > end:
-                st.error("Start date must not be after end date.")
-            else:
-                report = ga4_report(creds, property_id, start, end)
-                headers = [x.get("name", "") for x in report.get("metricHeaders", [])]
-                values = [[x.get("value", "") for x in row.get("metricValues", [])] for row in report.get("rows", [])]
-                st.session_state["ga4_report_table"] = [dict(zip(headers, row)) for row in values]
-        except Exception as exc:
-            st.error(f"GA4 API error: {exc}")
-    if "ga4_report_table" in st.session_state:
-        st.dataframe(st.session_state["ga4_report_table"], use_container_width=True)
-    if st.button("Load AdSense earnings report", disabled=not bool(creds)):
-        try:
-            if start > end:
-                st.error("Start date must not be after end date.")
-            else:
-                accounts, report = adsense_report(creds, start, end)
-                st.session_state["adsense_report_accounts"] = accounts
-                st.session_state["adsense_report_data"] = report
-                if not accounts:
-                    st.warning("No AdSense account was returned for this Google account.")
-        except Exception as exc:
-            st.error(f"AdSense API error: {exc}")
-    if st.session_state.get("adsense_report_data"):
-        st.json(st.session_state["adsense_report_data"])
-
-with tab_seo:
-    st.subheader("SEO and AdSense quality checklist")
-    checks = [
-        st.checkbox("Article solves a specific reader problem", key="seo1"),
-        st.checkbox("Includes original examples, tests, or useful analysis", key="seo2"),
-        st.checkbox("Every citation is real, relevant, and verified", key="seo3"),
-        st.checkbox("Content is not copied or lightly rewritten", key="seo4"),
-        st.checkbox("About, Contact, Privacy, and navigation pages are in place", key="seo5"),
-        st.checkbox("Mobile layout, broken links, and spelling are checked", key="seo6"),
-        st.checkbox("Relevant internal links and descriptive image alt text are added", key="seo7"),
-    ]
-    score = sum(checks)
-    st.progress(score / len(checks))
-    st.write(f"Self-check: {score}/{len(checks)}. This is not a Google approval score.")
-    st.link_button("Google Search Console", "https://search.google.com/search-console/")
-    st.link_button("Blogger", "https://www.blogger.com/")
-    st.link_button("Google AdSense", "https://www.google.com/adsense/")
-
-with tab_affiliate:
-    st.subheader("Affiliate idea planner")
-    st.write("Use affiliate links only when genuinely useful to readers, and clearly disclose them.")
-    with st.form("affiliate_form"):
-        product = st.text_input("Product or tool")
-        problem = st.text_area("Reader problem it solves")
-        experience = st.text_area("Your testing, experience, and downsides")
-        affiliate_url = st.text_input("Affiliate URL (optional)")
-        disclosed = st.checkbox("I will clearly disclose affiliate links")
-        save_idea = st.form_submit_button("Save affiliate idea")
-    if save_idea:
-        if not product.strip() or not problem.strip():
-            st.error("Enter a product and the reader problem.")
-        else:
-            path = DATA_DIR / "affiliate_ideas.json"
-            try:
-                ideas = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                ideas = []
-            ideas.append({
-                "created_at": datetime.now().isoformat(timespec="seconds"),
-                "product": product, "reader_problem": problem, "experience": experience,
-                "affiliate_url": affiliate_url, "disclosure_confirmed": disclosed,
-            })
-            path.write_text(json.dumps(ideas, ensure_ascii=False, indent=2), encoding="utf-8")
-            st.success("Affiliate idea saved for this app instance.")
-
-with tab_setup:
-    st.subheader("Connect Blogger")
-    st.write("This connection requests Blogger API access. You will authorize access on Google's page; the token stays in this browser session and is not committed to GitHub.")
-    st.warning("The OAuth client secret you previously shared must be rotated before connecting. Use the replacement secret only in Streamlit Secrets.")
-    st.write("1. Confirm Blogger API v3 is enabled in Google Cloud.")
-    st.write("2. Add this exact URI to the OAuth client's **Authorized redirect URIs**:")
-    st.code(BLOGGER_REDIRECT_URI)
-    st.write("3. Ensure Streamlit Secrets contains [google] client_id and client_secret.")
-    st.write("4. Click Connect Blogger below.")
-    if st.button("Connect Blogger", type="primary"):
-        connect_blogger()
+                url=start_oauth(google.get("client_id",""),google.get("client_secret",""),st.session_state)
+                st.link_button("Continue to Google authorization",url)
+            except Exception as exc: st.error(str(exc))
     st.divider()
-    st.subheader("What is not integrated yet")
-    st.markdown("- Enable Blogger API v3, Search Console API, Google Analytics Data API, and AdSense Management API in Google Cloud.\n- Add your account under Google Auth Platform → Audience → Test users while OAuth is in Testing.\n- AI generation requires a Gemini API key stored under [gemini] api_key in Streamlit Secrets.\n- Image selection searches Wikimedia Commons and shows attribution/license metadata; review licenses before publishing.")
-    st.caption("Blogger actions create drafts only. Existing published posts are not changed automatically.")
+    st.subheader("Affiliate vault")
+    with st.form("affiliate_vault_form"):
+        product=st.text_input("Product / service name")
+        keywords=st.text_input("Trigger keywords (comma separated)")
+        tracking_url=st.text_input("Tracking URL")
+        disclosure=st.text_area("Disclosure text",value="This article may contain affiliate links. If you buy through these links, we may earn a commission at no additional cost to you.")
+        save_aff=st.form_submit_button("Save affiliate entry")
+    if save_aff:
+        try:
+            parsed=urlparse(tracking_url.strip())
+            if parsed.scheme not in {"http","https"} or not parsed.netloc: raise ValueError("Enter a valid http(s) tracking URL.")
+            if not product.strip() or not disclosure.strip(): raise ValueError("Product name and disclosure are required.")
+            db.save_affiliate(product,[x.strip() for x in keywords.split(",") if x.strip()],tracking_url,disclosure)
+            st.success("Affiliate entry saved."); st.rerun()
+        except Exception as exc: st.error(str(exc))
+    entries=db.list_affiliates()
+    if entries: st.dataframe(pd.DataFrame([{k:x.get(k) for k in ["id","product_name","trigger_keywords","tracking_url","disclosure_snippet"]} for x in entries]),use_container_width=True,hide_index=True)

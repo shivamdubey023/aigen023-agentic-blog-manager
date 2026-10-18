@@ -1,37 +1,61 @@
 # Aigen023 Agentic Blog Manager
 
-Zero-budget starter dashboard for [NextGen Tech Notes](https://aigen023.blogspot.com/).
+Hosted starter for NextGen Tech Notes: Blogger draft management, SEO checklist, and affiliate planning.
 
-## Current features
-- Dashboard for local drafts and honest integration status.
-- Markdown article draft editor and downloads.
-- SVG cover image generation without an image API.
-- SEO / AdSense quality checklist.
-- Draft review workflow.
-- Affiliate idea planner.
-- Links to official Google integration documentation.
+## Current functionality
+- Google sign-in gate with an email allowlist.
+- Blogger OAuth connection using a separately stored client secret.
+- Lists the blogs associated with the authorized Google account.
+- Loads recent Blogger posts and drafts.
+- Downloads existing post HTML.
+- Saves local drafts and creates **Blogger drafts only**; it does not overwrite live posts.
+- SEO / AdSense quality checklist and affiliate idea tracker.
 
-## Not implemented yet
-This repository does **not** yet connect to Blogger, Search Console, GA4 or AdSense. It does not generate AI research or provide live views/earnings. Those features need Google OAuth/API setup and further development. Never assume expected income is guaranteed.
+## Deploy
+The app is deployed on Streamlit Community Cloud at https://aigen023-blog-manager.streamlit.app/.
 
-## Deploy free with Streamlit Community Cloud
-1. Open https://share.streamlit.io/ and sign in with GitHub.
-2. Choose **Create app**.
-3. Select repository `shivamdubey023/aigen023-agentic-blog-manager`, branch `main`, and main file path `app.py`.
-4. Deploy. The app URL will be shown by Streamlit.
+## Required Streamlit Secrets
+Open the app in Streamlit Community Cloud, choose **Manage app → Settings → Secrets**, and add the following TOML. Replace all placeholders. Use a newly rotated Google OAuth client secret; the previous secret was exposed and must not be reused. Use the Google account email you want to allow into the dashboard.
 
-GitHub stores the code; Streamlit Community Cloud runs the Python app. GitHub Pages alone cannot run a Streamlit/Python app.
+```toml
+[auth]
+redirect_uri = "https://aigen023-blog-manager.streamlit.app/oauth2callback"
+cookie_secret = "REPLACE_WITH_A_LONG_RANDOM_SECRET"
+client_id = "YOUR_GOOGLE_OAUTH_CLIENT_ID"
+client_secret = "YOUR_NEW_ROTATED_CLIENT_SECRET"
+server_metadata_url = "https://accounts.google.com/.well-known/openid-configuration"
 
-## Local run on Windows
-1. Install Python 3.11 or newer.
-2. Open a terminal in this folder.
-3. Run `py -m venv .venv`
-4. Activate with `.venv\\Scripts\\activate`
-5. Run `python -m pip install -r requirements.txt`
-6. Run `streamlit run app.py`
+[app]
+allowed_email = "YOUR_GOOGLE_ACCOUNT_EMAIL"
 
-## Data and privacy
-Drafts are saved to local files in this starter. Files on Streamlit Community Cloud may not be durable across restarts/redeploys; download important drafts and add a persistent database/storage layer before using it as your only copy. Do not commit credentials, OAuth tokens or API keys.
+[google]
+client_id = "YOUR_GOOGLE_OAUTH_CLIENT_ID"
+client_secret = "YOUR_NEW_ROTATED_CLIENT_SECRET"
+```
 
-## AdSense quality
-Focus on original useful content, first-hand testing, verified references, working navigation and human review. Avoid thin bulk-generated content, copied text, fabricated citations or artificial traffic. No app can guarantee approval or revenue.
+Do not commit these values to GitHub. The `[auth]` client uses Google sign-in to gate the app; the `[google]` client values are used for Blogger API authorization. The same web client can be used if both redirect URIs are authorized in Google Cloud.
+
+## Google Cloud configuration
+1. Enable **Blogger API v3** in the project.
+2. Configure Google Auth Platform branding and add your Google account as a test user.
+3. Under the OAuth web client, add these exact Authorized redirect URIs:
+   - `https://aigen023-blog-manager.streamlit.app/oauth2callback`
+   - `https://aigen023-blog-manager.streamlit.app/`
+4. Rotate the OAuth client secret that was shared in chat. Use the new secret only in Streamlit Secrets.
+5. Set the Streamlit Secrets shown above, then restart/reboot the app.
+
+## Security and data notes
+- The app is gated by Google sign-in and the `allowed_email` allowlist. Leave this allowlist restricted to your own Google account.
+- OAuth client secrets and tokens are not in source control.
+- Blogger authorization tokens live in the current browser session; reconnect after the session ends.
+- Local draft and affiliate files on Community Cloud are ephemeral and not a durable backup. Download important content.
+- The app creates drafts only. Review content and references before publishing.
+- Search Console, GA4, AdSense, and AI generation are not connected yet. No traffic or revenue is guaranteed.
+
+## Run locally
+```bash
+python -m venv .venv
+# Windows: .venv\\Scripts\\activate
+pip install -r requirements.txt
+streamlit run app.py
+```

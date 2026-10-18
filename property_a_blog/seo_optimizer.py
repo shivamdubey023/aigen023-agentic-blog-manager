@@ -40,11 +40,11 @@ def _add_heading_ids(body: str, headings: list[dict[str, str]]) -> str:
 
 def build_schema(title: str, description: str, keywords: str, faq: list[dict[str, str]]|None=None,
                  blog_url: str="https://aigen023.blogspot.com/") -> dict[str, Any]:
-    today = date.today().isoformat()
+    # Do not invent publication dates or claim the homepage is the article URL.
+    # Blogger assigns the actual URL and publication timestamp after a draft is published.
     article = {"@context":"https://schema.org","@type":"TechArticle","headline":title[:110],
-      "description":description[:300],"keywords":keywords,"datePublished":today,"dateModified":today,
-      "publisher":{"@type":"Organization","name":"NextGen Tech Notes"},
-      "mainEntityOfPage":{"@type":"WebPage","@id":blog_url}}
+      "description":description[:300],"keywords":keywords,
+      "publisher":{"@type":"Organization","name":"NextGen Tech Notes"}}
     result = {"techArticle":article}
     valid = [x for x in (faq or []) if x.get("question","").strip() and x.get("answer","").strip()]
     if valid:

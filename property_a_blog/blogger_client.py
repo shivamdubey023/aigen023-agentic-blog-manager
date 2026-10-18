@@ -41,8 +41,24 @@ def start_oauth(client_id: str, client_secret: str, session_state: Any) -> str:
     db.store_oauth_state(state)
     return url
 
-def finish_oauth(code: str, state: str, client_id: str, client_secret: str,
-                session_state: Any) -> Credentials:
+def finish_oauth(
+    code: str,
+    state: str,
+    session_state: Any,
+    client_id: str | None = None,
+    client_secret: str | None = None,
+) -> Credentials:
+    """Exchange OAuth callback code with backwards-compatible argument ordering."""
+    if not client_id or not client_secret:
+        try:
+            import streamlit as st
+            google_config = dict(st.secrets.get("google", {}))
+        except Exception:
+            google_config = {}
+        client_id = client_id or str(google_config.get("client_id", ""))
+        client_secret = client_secret or str(google_config.get("client_secret", ""))
+    if not client_id or not client_secret:
+        raise ValueError("Configure [google].client_id and [google].client_secret in Streamlit Secrets.")
     if not code or not state or not db.consume_oauth_state(state):
         raise ValueError("OAuth state is missing, expired, or already used. Restart Google login.")
     flow = Flow.from_client_config(

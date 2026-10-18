@@ -6,6 +6,7 @@ from pathlib import Path
 
 import streamlit as st
 import markdown as md
+from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
@@ -66,7 +67,11 @@ def get_blogger_credentials():
     if not token_data:
         return None
     try:
-        return Credentials.from_authorized_user_info(token_data, [BLOGGER_SCOPE])
+        creds = Credentials.from_authorized_user_info(token_data, [BLOGGER_SCOPE])
+        if creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+            st.session_state["blogger_token"] = json.loads(creds.to_json())
+        return creds if creds.valid else None
     except Exception:
         st.session_state.pop("blogger_token", None)
         return None
@@ -253,7 +258,7 @@ with tab_posts:
                 status = "Draft" if post.get("status") == "DRAFT" else "Published"
                 with st.expander(f"{post.get('title', 'Untitled')} · {status}"):
                     st.caption(f"Updated: {post.get('updated', 'unknown')} · Post ID: {post.get('id', '')}")
-                    st.markdown(post.get("content", ""), unsafe_allow_html=True)
+                    st.markdown(post.get("content", ""))
                     st.download_button(
                         "Download post HTML",
                         post.get("content", ""),

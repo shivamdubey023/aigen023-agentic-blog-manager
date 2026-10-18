@@ -832,10 +832,36 @@ body {
   }
 }
 
-/* Utilities */
+/* Utilities & Component Extras */
+.input-with-button {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.input-with-button .form-control {
+  flex: 1;
+}
+
+.input-with-button .btn {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.products-list-wrapper {
+  background: rgba(11, 16, 28, 0.6);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
 .mt-10 { margin-top: 10px; }
+.mt-12 { margin-top: 12px; }
 .mt-16 { margin-top: 16px; }
 .mt-20 { margin-top: 20px; }
 .mt-24 { margin-top: 24px; }
+.mb-20 { margin-bottom: 20px; }
 .mx-auto { margin-left: auto; margin-right: auto; }
 .max-w-800 { max-width: 800px; }

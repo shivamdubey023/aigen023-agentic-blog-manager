@@ -35,10 +35,11 @@ def start_oauth(client_id: str, client_secret: str, session_state: Any) -> str:
     flow = Flow.from_client_config({"web":{"client_id":client_id,"client_secret":client_secret,
       "auth_uri":"https://accounts.google.com/o/oauth2/auth","token_uri":"https://oauth2.googleapis.com/token",
       "redirect_uris":[REDIRECT_URI]}},scopes=SCOPES,redirect_uri=REDIRECT_URI)
-    url,state=flow.authorization_url(access_type="offline",include_granted_scopes="true",prompt="consent")
-    # Store only the random state, not the client secret, in SQLite so it survives
-    # Google's full-page redirect and Streamlit websocket reconnection.
-    db.store_oauth_state(state)
+    url,state=flow.authorization_url(access_type="offline",include_granted_scopes="true",prompt="consent",
+                                     code_challenge_method="S256")
+    # PKCE verifier is required when exchanging the authorization code and must
+    # survive Google's full-page redirect / Streamlit session reset.
+    db.store_oauth_state(state, flow.code_verifier or "")
     return url
 
 def finish_oauth(
@@ -59,14 +60,16 @@ def finish_oauth(
         client_secret = client_secret or str(google_config.get("client_secret", ""))
     if not client_id or not client_secret:
         raise ValueError("Configure [google].client_id and [google].client_secret in Streamlit Secrets.")
-    if not code or not state or not db.consume_oauth_state(state):
-        raise ValueError("OAuth state is missing, expired, or already used. Restart Google login.")
+    code_verifier = db.consume_oauth_state(state)
+    if not code or not state or not code_verifier:
+        raise ValueError("OAuth state or PKCE verifier is missing, expired, or already used. Restart Google login.")
     flow = Flow.from_client_config(
         {"web":{"client_id":client_id,"client_secret":client_secret,
           "auth_uri":"https://accounts.google.com/o/oauth2/auth",
           "token_uri":"https://oauth2.googleapis.com/token",
           "redirect_uris":[REDIRECT_URI]}},
         scopes=SCOPES, state=state, redirect_uri=REDIRECT_URI,
+        code_verifier=code_verifier,
     )
     flow.fetch_token(code=code)
     creds=flow.credentials

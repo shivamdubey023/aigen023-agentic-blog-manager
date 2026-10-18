@@ -57,9 +57,13 @@ def init_db() -> None:
           disclosure_snippet TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
         );
         CREATE TABLE IF NOT EXISTS oauth_states (
-          state TEXT PRIMARY KEY, created_at TEXT NOT NULL
+          state TEXT PRIMARY KEY, created_at TEXT NOT NULL, code_verifier TEXT NOT NULL DEFAULT ''
         );
         """)
+        # Migrate existing databases created before PKCE support.
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(oauth_states)").fetchall()}
+        if "code_verifier" not in columns:
+            conn.execute("ALTER TABLE oauth_states ADD COLUMN code_verifier TEXT NOT NULL DEFAULT ''")
 
 def save_article(*, topic: str, primary_keyword: str, title: str, markdown_body: str,
                  rendered_html: str = "", schema_json: dict[str, Any] | str | None = None,
@@ -183,26 +187,28 @@ def list_affiliates() -> list[dict[str, Any]]:
         result.append(item)
     return result
 
-def store_oauth_state(state: str) -> None:
-    """Persist a short-lived OAuth CSRF state across the external Google redirect."""
+def store_oauth_state(state: str, code_verifier: str = "") -> None:
+    """Persist short-lived OAuth state and its PKCE verifier across the Google redirect."""
     now = utc_now()
     with connection() as conn:
         conn.execute("DELETE FROM oauth_states WHERE created_at < datetime('now', '-15 minutes')")
-        conn.execute("INSERT OR REPLACE INTO oauth_states(state,created_at) VALUES(?,?)", (state, now))
+        conn.execute("INSERT OR REPLACE INTO oauth_states(state,created_at,code_verifier) VALUES(?,?,?)",
+                     (state, now, code_verifier))
 
-def consume_oauth_state(state: str) -> bool:
-    """Validate and consume OAuth state once, allowing for browser reconnects."""
+def consume_oauth_state(state: str) -> str | None:
+    """Validate and consume OAuth state once; return its PKCE verifier."""
     if not state:
-        return False
+        return None
     with connection() as conn:
-        row = conn.execute("SELECT created_at FROM oauth_states WHERE state=?", (state,)).fetchone()
+        row = conn.execute("SELECT created_at,code_verifier FROM oauth_states WHERE state=?", (state,)).fetchone()
         if not row:
-            return False
+            return None
         conn.execute("DELETE FROM oauth_states WHERE state=?", (state,))
         try:
             created = datetime.fromisoformat(row["created_at"])
             if (datetime.now(timezone.utc) - created).total_seconds() > 900:
-                return False
+                return None
         except (ValueError, TypeError):
-            return False
-        return True
+            return None
+        verifier = row["code_verifier"]
+        return verifier or None

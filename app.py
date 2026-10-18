@@ -58,9 +58,9 @@ if st.query_params.get("code"):
         finish_oauth(
             st.query_params.get("code", ""),
             st.query_params.get("state", ""),
-            google_oauth.get("client_id", ""),
-            google_oauth.get("client_secret", ""),
             st.session_state,
+            client_id=google_oauth.get("client_id", ""),
+            client_secret=google_oauth.get("client_secret", ""),
         )
         st.query_params.clear()
         st.rerun()

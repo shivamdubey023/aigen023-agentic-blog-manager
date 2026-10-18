@@ -118,6 +118,16 @@ def set_queue_state(state: str) -> None:
             conn.execute("UPDATE automation_queue SET state=?,execution_log=?,updated_at=? WHERE id=?",
                          (state,log,now,row["id"]))
 
+
+def restart_queue() -> None:
+    """Resume all queued work with fresh retry counters and an audit event."""
+    now = utc_now()
+    with connection() as conn:
+        rows = conn.execute("SELECT id,execution_log FROM automation_queue").fetchall()
+        for row in rows:
+            conn.execute("UPDATE automation_queue SET state='RUNNING',retry_count=0,updated_at=?,execution_log=? WHERE id=?",
+                         (now,_append_log(row["execution_log"],{"at":now,"event":"restarted"}),row["id"]))
+
 def _append_log(existing: str, entry: dict[str, Any]) -> str:
     try: events = json.loads(existing or "[]")
     except (TypeError,json.JSONDecodeError): events = []

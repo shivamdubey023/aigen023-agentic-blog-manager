@@ -34,6 +34,9 @@ class DatabaseTests(unittest.TestCase):
                 saved = db.get_article(article_id)
                 self.assertEqual(saved["title"], "Python guide")
                 self.assertEqual(saved["status"], "DRAFT")
+                db.store_oauth_state("test-state")
+                self.assertTrue(db.consume_oauth_state("test-state"))
+                self.assertFalse(db.consume_oauth_state("test-state"))
         finally:
             db.DB_PATH = original
 

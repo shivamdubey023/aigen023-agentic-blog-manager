@@ -51,14 +51,21 @@ def owner_gate() -> str:
         st.stop()
     return email
 
-# Process the Blogger/Search Console OAuth callback only when a flow was started here.
-if st.query_params.get("code") and st.session_state.get("google_api_oauth_state"):
+# Process Google OAuth before the owner gate; OAuth redirects may create a fresh Streamlit session.
+if st.query_params.get("code"):
+    google_oauth = secrets_section("google")
     try:
-        finish_oauth(st.query_params.get("code",""),st.query_params.get("state",""),st.session_state)
+        finish_oauth(
+            st.query_params.get("code", ""),
+            st.query_params.get("state", ""),
+            google_oauth.get("client_id", ""),
+            google_oauth.get("client_secret", ""),
+            st.session_state,
+        )
         st.query_params.clear()
         st.rerun()
     except Exception as exc:
-        st.error(f"Google API authorization failed: {oauth_error_hint(exc)}")
+        st.error(f"Google login failed: {oauth_error_hint(exc)}")
         st.query_params.clear()
 
 owner = owner_gate()

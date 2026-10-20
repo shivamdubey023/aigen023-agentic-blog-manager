@@ -19,17 +19,20 @@ from core.env_config import (
     get_groq_key, get_gemini_key, get_cohere_key, get_openai_key, get_anthropic_key,
 )
 from core.image_renderer import featured_image_html, section_image_html
+from core.image_generation import generate_pollinations_image
 from core.llm_engine import SUPPORTED_PROVIDERS, generate_technical_article, resolve_key_for_provider
 from core.stock_images import IMAGE_PROVIDERS, provider_status as image_provider_status, search_stock_images
 from core.rewriter import html_to_clean_text, rewrite_blog_for_adsense
 from core.trending_topics import get_random_trending_topic, list_all_trending_topics
 from property_a_blog.blogger_client import (
-    BLOG_URL, create_draft, finish_oauth, get_credentials, list_blogs, list_posts,
+    BLOG_URL, CredentialLoadError, create_draft, finish_oauth, get_credentials, get_post, list_blogs, list_posts,
     oauth_error_hint, search_console_report, start_oauth, update_live_post_navigation,
+    publish_draft, update_existing_draft, update_live_post_content, verify_post,
 )
 from property_a_blog.navigation import navigation_content, order_live_posts
 from property_a_blog.seo_optimizer import (
     affiliate_box, content_quality_checks, ebook_card_box, render_article,
+    search_description_or_generate,
 )
 
 # Initialize database
@@ -59,10 +62,10 @@ class RewriteArticleRequest(BaseModel):
     extra_instructions: Optional[str] = ""
 
 class ImageGenerateRequest(BaseModel):
-    prompt: Optional[str] = ""
-    topic: Optional[str] = ""
-    width: Optional[int] = 1200
-    height: Optional[int] = 630
+    prompt: Optional[str] = Field(default="", max_length=500)
+    topic: Optional[str] = Field(default="", max_length=500)
+    width: Optional[int] = Field(default=768, ge=1, le=768)
+    height: Optional[int] = Field(default=512, ge=1, le=768)
 
 class ImageSearchRequest(BaseModel):
     query: str = Field(..., min_length=2, max_length=120)
@@ -91,8 +94,11 @@ class SaveArticleRequest(BaseModel):
     markdown_body: str = Field(..., min_length=1, max_length=100000)
     rendered_html: Optional[str] = Field(default="", max_length=500000)
     schema_json: Optional[Any] = None
-    status: Optional[str] = "DRAFT"
+    status: Optional[str] = None
     article_id: Optional[int] = None
+    include_toc: bool = True
+    product_id: Optional[int] = None
+    affiliate_id: Optional[int] = None
 
 class QualitySourceRequest(BaseModel):
     url: str = Field(..., min_length=8, max_length=2048)
@@ -109,9 +115,13 @@ class ReviewDecisionRequest(BaseModel):
 
 class CreateBloggerDraftRequest(BaseModel):
     blog_id: str
-    title: str
-    rendered_html: str
     article_id: Optional[int] = None
+    confirmed: bool = False
+
+class BloggerPostActionRequest(BaseModel):
+    blog_id: str = Field(..., min_length=1, max_length=200)
+    post_id: str = Field(..., min_length=1, max_length=200)
+    article_id: Optional[int] = Field(default=None, ge=1)
     confirmed: bool = False
 
 class SyncNavigationRequest(BaseModel):
@@ -255,10 +265,12 @@ def run_autopilot(req: AutopilotRequest):
             )
 
         # 4. Render HTML with schema and TOC. Images are explicitly chosen later.
+        meta_description = search_description_or_generate("", draft, title)
         rendered, schema = render_article(
             draft,
             title,
             keyword,
+            description=meta_description,
             include_toc=True,
             ebook_html=product_snippet,
             affiliate_html=affiliate_snippet,
@@ -273,6 +285,10 @@ def run_autopilot(req: AutopilotRequest):
             rendered_html=rendered,
             schema_json=schema,
             status="DRAFT",
+            meta_description=meta_description,
+            include_toc=True,
+            product_id=selected_product["id"] if selected_product else None,
+            affiliate_id=selected_affiliate["id"] if selected_affiliate else None,
         )
 
         warnings = content_quality_checks(title, draft)
@@ -374,10 +390,19 @@ def rewrite_article(req: RewriteArticleRequest):
 
 @app.post("/api/generate-image")
 def generate_image(req: ImageGenerateRequest):
-    raise HTTPException(
-        status_code=410,
-        detail="AI image generation is disabled to avoid unexpected usage charges. Use the optional stock-image search instead.",
-    )
+    topic = (req.topic or "").strip() or (req.prompt or "").strip()
+    if not topic:
+        raise HTTPException(status_code=400, detail="Enter the article topic for a relevant featured image.")
+    try:
+        return generate_pollinations_image(
+            topic,
+            width=req.width or 768,
+            height=req.height or 512,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 @app.get("/api/images/providers")
 def get_image_provider_status():
@@ -396,61 +421,108 @@ def search_images(req: ImageSearchRequest):
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
+def _article_labels(topic: str, keyword: str) -> list[str]:
+    labels = []
+    for value in (keyword, topic):
+        for candidate in re.split(r"[,|]", value or ""):
+            label = re.sub(r"\s+", " ", candidate).strip()
+            if label and label.casefold() not in {existing.casefold() for existing in labels}:
+                labels.append(label[:100])
+            if len(labels) == 10:
+                return labels
+    return labels
+
+def _render_article_with_options(
+    *,
+    markdown_text: str,
+    title: str,
+    keyword: str,
+    description: str,
+    include_toc: bool,
+    product_id: int | None,
+    affiliate_id: int | None,
+    featured_image_html: str = "",
+    section_image_html: str = "",
+    extra_ebook_html: str = "",
+) -> tuple[str, dict[str, Any], str]:
+    product_snippet = ""
+    if product_id is not None:
+        product = db.get_product(product_id)
+        if not product:
+            raise HTTPException(status_code=404, detail="The selected product is no longer available.")
+        product_snippet = ebook_card_box(
+            title=product["title"],
+            product_url=product["url"],
+            price=product.get("price") or "View details",
+            tagline=product.get("description") or "Recommended resource.",
+        )
+
+    affiliate_snippet = ""
+    if affiliate_id is not None:
+        affiliate = next((item for item in db.list_affiliates() if item["id"] == affiliate_id), None)
+        if not affiliate:
+            raise HTTPException(status_code=404, detail="The selected affiliate link is no longer available.")
+        affiliate_snippet = affiliate_box(
+            affiliate["product_name"],
+            affiliate["tracking_url"],
+            affiliate["disclosure_snippet"],
+        )
+
+    search_description = search_description_or_generate(description, markdown_text, title)
+    rendered, schema = render_article(
+        markdown_text,
+        title,
+        keyword or title,
+        description=search_description,
+        include_toc=include_toc,
+        ebook_html=product_snippet or extra_ebook_html,
+        affiliate_html=affiliate_snippet,
+        featured_image_html=featured_image_html,
+        section_image_html=section_image_html,
+    )
+    return rendered, schema, search_description
+
 @app.post("/api/render")
 def render_post(req: RenderArticleRequest):
-    affiliate_snippet = ""
-    if req.affiliate_id:
-        affiliates = db.list_affiliates()
-        target = next((a for a in affiliates if a["id"] == req.affiliate_id), None)
-        if target:
-            affiliate_snippet = affiliate_box(
-                target["product_name"], target["tracking_url"], target["disclosure_snippet"]
-            )
-
-    product_snippet = ""
-    if req.include_product:
-        if req.product_id:
-            p = db.get_product(req.product_id)
-            if p:
-                product_snippet = ebook_card_box(
-                    title=p["title"],
-                    product_url=p["url"],
-                    price=p.get("price") or "₹499",
-                    tagline=p.get("description") or "Recommended comprehensive guide.",
-                )
-        elif req.ebook_url:
-            product_snippet = ebook_card_box(
-                title=req.ebook_title or "Code to Career — The Python Fresher to Job-Ready Developer",
-                product_url=req.ebook_url or "https://codetocareer52.myinstamojo.com/product/code-to-career",
-                price=req.ebook_price or "₹499",
-            )
-
+    if req.include_product and req.product_id is None and not req.ebook_url:
+        raise HTTPException(status_code=400, detail="Select a saved product before enabling product insertion.")
     try:
-        img_snippet = featured_image_html(req.featured_image_url) if req.featured_image_url else ""
-        diag_snippet = (
+        featured = featured_image_html(req.featured_image_url) if req.featured_image_url else ""
+        section = (
             section_image_html(req.section_image_url, caption="Architecture & Technical Workflow")
             if req.section_image_url
             else ""
         )
+        external_product = ""
+        if req.include_product and req.product_id is None and req.ebook_url:
+            external_product = ebook_card_box(
+                title=req.ebook_title or "Code to Career — The Python Fresher to Job-Ready Developer",
+                product_url=req.ebook_url,
+                price=req.ebook_price or "View details",
+            )
+        rendered, schema, description = _render_article_with_options(
+            markdown_text=req.markdown_text,
+            title=req.title.strip(),
+            keyword=req.primary_keyword or req.title,
+            description=req.meta_description or "",
+            include_toc=req.include_toc if req.include_toc is not None else True,
+            product_id=req.product_id if req.include_product else None,
+            affiliate_id=req.affiliate_id,
+            featured_image_html=featured,
+            section_image_html=section,
+            extra_ebook_html=external_product,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    rendered, schema = render_article(
-        req.markdown_text,
-        req.title,
-        req.primary_keyword or req.title,
-        description=req.meta_description or "",
-        include_toc=req.include_toc if req.include_toc is not None else True,
-        affiliate_html=affiliate_snippet,
-        ebook_html=product_snippet,
-        featured_image_html=img_snippet,
-        section_image_html=diag_snippet,
-    )
     warnings = content_quality_checks(req.title, req.markdown_text)
 
     return {
         "rendered_html": rendered,
         "schema": schema,
+        "meta_description": description,
+        "include_toc": req.include_toc if req.include_toc is not None else True,
+        "product_id": req.product_id if req.include_product else None,
+        "affiliate_id": req.affiliate_id,
         "warnings": warnings,
         "word_count": len(re.findall(r"\b[\w'-]+\b", req.markdown_text)),
     }
@@ -482,18 +554,46 @@ def delete_single_article(article_id: int, confirmed: bool = False):
 @app.post("/api/articles")
 def save_single_article(req: SaveArticleRequest):
     try:
+        existing = db.get_article(req.article_id) if req.article_id is not None else None
+        status = req.status or (existing["status"] if existing else "DRAFT")
+        keyword = (req.primary_keyword or "").strip() or req.topic.strip()
+        description = search_description_or_generate(
+            req.meta_description or "",
+            req.markdown_body,
+            req.title,
+        )
+        rendered, schema, description = _render_article_with_options(
+            markdown_text=req.markdown_body,
+            title=req.title.strip(),
+            keyword=keyword,
+            description=description,
+            include_toc=req.include_toc,
+            product_id=req.product_id,
+            affiliate_id=req.affiliate_id,
+        )
         aid = db.save_article(
             topic=req.topic,
-            primary_keyword=req.primary_keyword or req.topic,
-            title=req.title,
-            meta_description=req.meta_description,
+            primary_keyword=keyword,
+            title=req.title.strip(),
+            meta_description=description,
             markdown_body=req.markdown_body,
-            rendered_html=req.rendered_html or "",
-            schema_json=req.schema_json or {},
-            status=req.status or "DRAFT",
+            rendered_html=rendered,
+            schema_json=schema,
+            status=status,
             article_id=req.article_id,
+            include_toc=req.include_toc,
+            product_id=req.product_id,
+            affiliate_id=req.affiliate_id,
         )
-        return {"id": aid, "message": f"Article #{aid} saved successfully."}
+        return {
+            "id": aid,
+            "meta_description": description,
+            "rendered_html": rendered,
+            "schema": schema,
+            "message": f"Article #{aid} saved successfully.",
+        }
+    except HTTPException:
+        raise
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
@@ -650,7 +750,10 @@ def delete_single_affiliate(affiliate_id: int):
 
 # Blogger & OAuth Routes
 def resolve_current_credentials(request: Optional[Request] = None) -> tuple[Any, dict[str, Any]]:
-    creds = get_credentials({})
+    try:
+        creds = get_credentials({})
+    except CredentialLoadError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     user_str = db.get_system_credential("google_user")
     try:
         user = json.loads(user_str) if user_str else {}
@@ -751,13 +854,29 @@ def handle_oauth_callback(request: Request, code: str = "", state: str = "", err
 
 @app.get("/api/oauth/status")
 def oauth_status(request: Request):
-    creds, user = resolve_current_credentials(request)
+    credential_error = ""
+    reconnect_required = False
+    try:
+        creds, user = resolve_current_credentials(request)
+    except HTTPException as exc:
+        creds = None
+        credential_error = str(exc.detail)
+        reconnect_required = "reconnect" in credential_error.casefold() or "incomplete" in credential_error.casefold()
+        user_value = db.get_system_credential("google_user")
+        try:
+            user = json.loads(user_value) if user_value else {}
+        except (TypeError, json.JSONDecodeError):
+            user = {}
     configured = bool(get_google_client_id() and get_google_client_secret())
     saved_credential = db.get_system_credential("google_api_token")
     if creds and getattr(creds, "valid", False):
         connection_state = "connected"
     elif not configured:
         connection_state = "not_configured"
+    elif reconnect_required:
+        connection_state = "reconnect_required"
+    elif credential_error:
+        connection_state = "temporarily_unavailable"
     elif saved_credential:
         connection_state = "reconnect_required"
     else:
@@ -773,7 +892,14 @@ def oauth_status(request: Request):
         "user": public_user,
         "configured": configured,
         "configured_redirect_uri": get_canonical_callback_url(request),
+        "error": credential_error,
     }
+
+@app.post("/api/oauth/disconnect")
+def disconnect_google():
+    db.delete_system_credential("google_api_token")
+    db.delete_system_credential("google_user")
+    return {"success": True, "connection_state": "not_connected"}
 
 @app.get("/api/blogger/blogs")
 def get_blogger_blogs(request: Request):
@@ -844,13 +970,29 @@ def upload_blogger_draft(req: CreateBloggerDraftRequest, request: Request):
     try:
         # Avoid a second draft after a lost response when the first draft is still discoverable by title.
         existing_posts = list_posts(creds, req.blog_id, limit=500)
-        if any(str(post.get("title", "")).strip().casefold() == req.title.strip().casefold()
+        if any(str(post.get("title", "")).strip().casefold() == article["title"].strip().casefold()
                for post in existing_posts):
             raise HTTPException(
                 status_code=409,
                 detail="A Blogger post with this exact title already exists. Inspect Blogger before retrying.",
             )
-        created = create_draft(creds, req.blog_id, req.title, req.rendered_html)
+        rendered, schema, description = _render_article_with_options(
+            markdown_text=article["markdown_body"],
+            title=article["title"],
+            keyword=article["primary_keyword"],
+            description=article.get("meta_description") or "",
+            include_toc=bool(article.get("include_toc", 1)),
+            product_id=article.get("product_id"),
+            affiliate_id=article.get("affiliate_id"),
+        )
+        labels = _article_labels(article["topic"], article["primary_keyword"])
+        created = create_draft(
+            creds,
+            req.blog_id,
+            article["title"],
+            rendered,
+            labels=labels,
+        )
         post_id = created.get("id", "")
         post_url = created.get("url", "")
         if not post_id:
@@ -858,21 +1000,220 @@ def upload_blogger_draft(req: CreateBloggerDraftRequest, request: Request):
         db.save_article(
             topic=article["topic"],
             primary_keyword=article["primary_keyword"],
-            title=req.title,
-            meta_description=article["meta_description"],
+            title=article["title"],
+            meta_description=description,
             markdown_body=article["markdown_body"],
-            rendered_html=req.rendered_html,
-            schema_json=article.get("schema_json", "{}"),
+            rendered_html=rendered,
+            schema_json=schema,
             status="DRAFT",
             article_id=req.article_id,
             blogger_post_id=post_id,
             blogger_blog_id=req.blog_id,
+            blogger_post_url=post_url,
+            include_toc=bool(article.get("include_toc", 1)),
+            product_id=article.get("product_id"),
+            affiliate_id=article.get("affiliate_id"),
         )
-        return {"success": True, "post_id": post_id, "url": post_url}
+        # Persist the returned ID before verifying so an uncertain read cannot cause a duplicate retry.
+        try:
+            verified_post = get_post(creds, req.blog_id, post_id)
+        except Exception:
+            return {
+                "success": True,
+                "post_id": post_id,
+                "url": str(post_url or ""),
+                "verified": False,
+                "verification": {},
+                "message": (
+                    "Blogger created the draft and the local post link was saved, "
+                    "but read-back verification failed. Inspect Blogger before retrying."
+                ),
+            }
+        verification = verify_post(
+            verified_post,
+            title=article["title"],
+            rendered_html=rendered,
+            status="DRAFT",
+            labels=labels,
+        )
+        return {
+            "success": True,
+            "post_id": post_id,
+            "url": str(verified_post.get("url") or post_url),
+            "verified": all(verification.values()),
+            "verification": verification,
+            "message": (
+                "Blogger draft created and verified."
+                if all(verification.values())
+                else "Blogger returned a post, but verification was incomplete. Inspect it before retrying."
+            ),
+        }
     except HTTPException:
         raise
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Blogger draft creation failed: {str(exc)}") from exc
+
+@app.post("/api/blogger/posts/update")
+def update_blogger_post(req: BloggerPostActionRequest, request: Request):
+    if not req.confirmed:
+        raise HTTPException(status_code=400, detail="Explicitly confirm the Blogger post update.")
+    if not req.article_id:
+        raise HTTPException(status_code=400, detail="Select a saved article linked to this Blogger post.")
+    creds, _ = resolve_current_credentials(request)
+    if not creds:
+        raise HTTPException(status_code=401, detail="Google account not connected.")
+    article = db.get_article(req.article_id)
+    if not article or article.get("blogger_post_id") != req.post_id or article.get("blogger_blog_id") != req.blog_id:
+        raise HTTPException(status_code=409, detail="The saved article is not linked to this Blogger post.")
+    try:
+        rendered, schema, description = _render_article_with_options(
+            markdown_text=article["markdown_body"],
+            title=article["title"],
+            keyword=article["primary_keyword"],
+            description=article.get("meta_description") or "",
+            include_toc=bool(article.get("include_toc", 1)),
+            product_id=article.get("product_id"),
+            affiliate_id=article.get("affiliate_id"),
+        )
+        existing = get_post(creds, req.blog_id, req.post_id)
+        status = str(existing.get("status") or "").upper()
+        if status == "DRAFT":
+            updated = update_existing_draft(
+                creds, req.blog_id, req.post_id, article["title"], rendered,
+                explicit_confirmation=True,
+            )
+        elif status == "LIVE":
+            updated = update_live_post_content(
+                creds, req.blog_id, req.post_id, article["title"], rendered,
+                explicit_confirmation=True,
+            )
+        else:
+            raise HTTPException(status_code=409, detail="Only an existing Blogger draft or live post can be updated.")
+        verified = get_post(creds, req.blog_id, req.post_id)
+        verification = verify_post(
+            verified,
+            title=article["title"],
+            rendered_html=rendered,
+            status=status,
+        )
+        if all(verification.values()):
+            db.save_article(
+                topic=article["topic"],
+                primary_keyword=article["primary_keyword"],
+                title=article["title"],
+                meta_description=description,
+                markdown_body=article["markdown_body"],
+                rendered_html=rendered,
+                schema_json=schema,
+                status=article["status"],
+                article_id=req.article_id,
+                blogger_post_id=req.post_id,
+                blogger_blog_id=req.blog_id,
+                blogger_post_url=str(verified.get("url") or article.get("blogger_post_url") or ""),
+                include_toc=bool(article.get("include_toc", 1)),
+                product_id=article.get("product_id"),
+                affiliate_id=article.get("affiliate_id"),
+            )
+        return {
+            "success": all(verification.values()),
+            "status": status,
+            "url": str(verified.get("url") or ""),
+            "verification": verification,
+            "message": "Blogger update verified." if all(verification.values()) else (
+                "Blogger returned an update, but verification was incomplete. Inspect the post before retrying."
+            ),
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Blogger update could not be confirmed: {str(exc)}") from exc
+
+@app.post("/api/blogger/posts/verify")
+def verify_blogger_post(req: BloggerPostActionRequest, request: Request):
+    if not req.article_id:
+        raise HTTPException(status_code=400, detail="Select a saved article linked to this Blogger post.")
+    creds, _ = resolve_current_credentials(request)
+    if not creds:
+        raise HTTPException(status_code=401, detail="Google account not connected.")
+    article = db.get_article(req.article_id)
+    if not article or article.get("blogger_post_id") != req.post_id or article.get("blogger_blog_id") != req.blog_id:
+        raise HTTPException(status_code=409, detail="The saved article is not linked to this Blogger post.")
+    try:
+        post = get_post(creds, req.blog_id, req.post_id)
+        verification = verify_post(
+            post,
+            title=article["title"],
+            rendered_html=article["rendered_html"],
+            status="LIVE" if article["status"] == "PUBLISHED" else "DRAFT",
+            labels=_article_labels(article["topic"], article["primary_keyword"]),
+        )
+        return {
+            "success": all(verification.values()),
+            "url": str(post.get("url") or article.get("blogger_post_url") or ""),
+            "verification": verification,
+            "message": (
+                "Blogger post matches the saved article."
+                if all(verification.values())
+                else "Blogger post differs from the saved article; inspect the verification details before updating."
+            ),
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="Blogger post verification could not be completed.") from exc
+
+@app.post("/api/blogger/posts/publish")
+def publish_blogger_post(req: BloggerPostActionRequest, request: Request):
+    if not req.confirmed:
+        raise HTTPException(status_code=400, detail="Explicitly confirm publishing this Blogger draft.")
+    if not req.article_id:
+        raise HTTPException(status_code=400, detail="Select a saved article linked to this Blogger draft.")
+    creds, _ = resolve_current_credentials(request)
+    if not creds:
+        raise HTTPException(status_code=401, detail="Google account not connected.")
+    article = db.get_article(req.article_id)
+    if not article or article.get("blogger_post_id") != req.post_id or article.get("blogger_blog_id") != req.blog_id:
+        raise HTTPException(status_code=409, detail="The saved article is not linked to this Blogger draft.")
+    try:
+        publish_draft(creds, req.blog_id, req.post_id, explicit_confirmation=True)
+        published = get_post(creds, req.blog_id, req.post_id)
+        verification = verify_post(
+            published,
+            title=article["title"],
+            rendered_html=article["rendered_html"],
+            status="LIVE",
+        )
+        if not all(verification.values()):
+            return {
+                "success": False,
+                "verification": verification,
+                "message": "Blogger publish was requested but could not be fully verified. Inspect the post before retrying.",
+            }
+        db.save_article(
+            topic=article["topic"],
+            primary_keyword=article["primary_keyword"],
+            title=article["title"],
+            meta_description=article["meta_description"],
+            markdown_body=article["markdown_body"],
+            rendered_html=article["rendered_html"],
+            schema_json=article.get("schema_json", "{}"),
+            status="PUBLISHED",
+            article_id=req.article_id,
+            blogger_post_id=req.post_id,
+            blogger_blog_id=req.blog_id,
+            blogger_post_url=str(published.get("url") or article.get("blogger_post_url") or ""),
+            include_toc=bool(article.get("include_toc", 1)),
+            product_id=article.get("product_id"),
+            affiliate_id=article.get("affiliate_id"),
+        )
+        return {
+            "success": True,
+            "url": str(published.get("url") or ""),
+            "verification": verification,
+            "message": "Blogger post is live and verified.",
+        }
+    except Exception as exc:
+        if isinstance(exc, HTTPException):
+            raise
+        raise HTTPException(status_code=502, detail=f"Blogger publish could not be confirmed: {str(exc)}") from exc
 
 @app.post("/api/blogger/navigation/sync")
 def sync_blogger_navigation(req: SyncNavigationRequest, request: Request):

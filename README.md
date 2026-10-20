@@ -10,9 +10,11 @@ A single-publication content workflow for [NextGen Tech Notes](https://aigen023.
 - Monetization cards are added only when a specific saved product or affiliate link is selected; generation does not fall back to an unrelated first vault entry.
 - Advisory content quality reports for overlap with saved drafts and reviewer-provided source excerpts, citation formatting, claim-support cues, writing, SEO, and technical examples. Similarity is a human-review signal, not proof of plagiarism.
 - Persisted quality reports and article revisions, with content-bound human review decisions. Editing a reviewed draft marks the previous decision stale; approval does not publish an article.
-- Optional Pexels or Unsplash search. Results are inserted only after selection and include photographer/provider attribution; image generation is disabled.
+- Optional Pexels or Unsplash search. Results are inserted only after selection and include photographer/provider attribution. Pollinations AI can generate a topic-specific featured illustration without an API key; its free endpoint is best-effort and rate-limited, and generated assets remain provider-hosted rather than mirrored to durable storage.
 - One Markdown-to-Blogger rendering pipeline supports responsive tables, captioned/attributed images, safe HTML, and user-authored process diagrams rendered as portable SVG. Live-post internal-link and previous/next suggestions use verified Blogger URLs.
-- Confirmed Blogger draft creation. The app does not publish drafts automatically.
+- Saved product and affiliate selections, TOC options, generated search descriptions, and server-rendered Blogger HTML persist with drafts and revisions. A generated search description is stored locally; Blogger's documented Posts API does not expose a search-description field.
+- Confirmed Blogger draft creation with returned post ID/URL persistence and a follow-up read-back verification. Updating a linked draft or live post and publishing a draft are separate, explicitly confirmed actions; ordinary saving does not change Blogger content.
+- Google OAuth can be explicitly disconnected. Temporary Google refresh failures retain saved credentials and report an actionable status rather than silently clearing them.
 - Manually triggered previous/next navigation sync for LIVE Blogger posts. It changes live post HTML only after confirmation and reports partial failures.
 - Google Search Console and Blogger API integrations when owner OAuth is configured.
 - An installable eBook storefront/PWA at `/ebook/`, with a product catalog, search, device-local saved titles, install guidance for Android/iOS, and an offline-cached app shell/catalog.
@@ -35,9 +37,19 @@ To exercise the local application without external credentials, open the editor,
 
 Local article data, revisions, quality reports, review decisions, and Google OAuth credentials are stored in `content_ops.db` by default. Set `CONTENT_OPS_DB` to select another SQLite path. Google OAuth binds its signed state and separate PKCE verifier to short-lived HttpOnly cookies; the verifier is never sent in the authorization URL. Saved credentials still require durable server-side storage. The application has no owner-password login; its APIs are accessible to anyone who can reach the deployment unless access is restricted outside the application.
 
+## Article and Blogger workflow
+
+The existing editor is the single authoring surface. Generate or write Markdown, choose an optional saved product or affiliate entry, review the preview, and save locally. The API renders Markdown itself when saving and again when creating a Blogger draft, so the client cannot submit arbitrary preview HTML in place of the saved Markdown. A successful Blogger draft action records the Blogger post ID and URL before fetching the new post to verify its title, HTML, labels, and draft status. If verification is incomplete, inspect Blogger and the linked local article before retrying.
+
+Use **Create Blogger Draft** only after reviewing the saved article. **Update Blogger Post** asks separately before replacing the content of the linked existing post; **Publish Blogger Draft** requires its own confirmation and is only offered for linked drafts. These operations require the deployed UI and API to be protected by Vercel Deployment Protection or equivalent platform access controls. This repository does not configure or verify that deployment setting.
+
+Products and affiliate links are selected from saved vault records; no arbitrary first item is inserted. Images and attribution inserted into the Markdown remain with the article source. The current article schema stores TOC selection, product/affiliate IDs, and Blogger post URL in backward-compatible SQLite columns; revisions store TOC and monetization selections. Existing databases are upgraded additively at startup. SQLite on Vercel `/tmp` is still ephemeral, so these records and OAuth credentials are not durable across instances.
+
 ## Content review
 
 In the editor, save the draft and choose **Save draft & run checks**. Optionally provide source excerpts as `URL | excerpt` (one per line). Review the evidence, revise, and recheck after editing. **Approve reviewed draft** records an explicit human decision but does not publish to Blogger. Revision history can restore an earlier saved version into the editor; saving it creates another revision.
+
+The Image Studio sends the supplied article topic to Pollinations AI. The current classic endpoint returns a JPEG and documents a best-effort limit of one image request per IP at least 45 seconds apart; consult its current [API documentation](https://github.com/pollinations/pollinations/blob/master/APIDOCS.md) and [terms](https://pollinations.ai/terms) before use. The application validates the returned JPEG and lets the user preview/select it, but does not store a durable copy or verify that Blogger will retain access to the provider-hosted URL. Use a selected Pexels/Unsplash result with source attribution or continue without an image if provider hosting is unsuitable.
 
 The local review compares with up to 100 recent saved articles and reviewer-provided excerpts. It does not fetch or verify citations, independently establish facts, execute code, or assess AI authorship. See [content quality review](docs/CONTENT_QUALITY.md) for details and limitations.
 

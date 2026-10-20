@@ -1,6 +1,7 @@
 """SEO-safe rendering helpers for Blogger HTML payloads."""
 from __future__ import annotations
 import html, json, re, unicodedata
+from html.parser import HTMLParser
 from datetime import date
 from typing import Any
 from urllib.parse import urlparse
@@ -12,7 +13,8 @@ from core.article_visuals import parse_flow_chains, render_flow_diagram
 def slugify_heading(value: str) -> str:
     value = unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode("ascii").lower()
     value = re.sub(r"[^a-z0-9\s-]", "", value)
-    return re.sub(r"[-\s]+", "-", value).strip("-") or "section"
+    slug = re.sub(r"[-\s]+", "-", value).strip("-") or "section"
+    return f"section-{slug}" if slug[0].isdigit() else slug
 
 def parse_headings(markdown_text: str) -> list[dict[str, str]]:
     headings, used = [], {}
@@ -32,6 +34,8 @@ def parse_headings(markdown_text: str) -> list[dict[str, str]]:
         match = re.match(r"^(#{2,4})\s+(.+?)\s*#*\s*$", line)
         if not match: continue
         title, base = match.group(2).strip(), slugify_heading(match.group(2).strip())
+        if title.casefold() == "table of contents":
+            continue
         used[base] = used.get(base, 0) + 1
         headings.append({"title":title,"anchor":base if used[base] == 1 else f"{base}-{used[base]}","level":str(len(match.group(1)))})
     return headings
@@ -42,6 +46,60 @@ def build_toc(headings: list[dict[str, str]]) -> str:
     for h in headings:
         lines.append("  " * max(0, int(h["level"]) - 2) + f'- [{h["title"]}](#{h["anchor"]})')
     return "\n".join(lines) + "\n\n"
+
+
+class _PlainText(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.parts: list[str] = []
+
+    def handle_data(self, data: str) -> None:
+        self.parts.append(data)
+
+
+def generate_search_description(markdown_text: str, title: str, max_length: int = 150) -> str:
+    """Derive a concise snippet from the article body without inventing claims."""
+    without_code = re.sub(
+        r"(?ms)^\s*(`{3,}|~{3,}).*?^\s*\1\s*$",
+        "",
+        markdown_text,
+    )
+    paragraphs = []
+    for block in re.split(r"\n\s*\n", without_code):
+        lines = [
+            line.strip()
+            for line in block.splitlines()
+            if line.strip() and not re.match(r"^\s*#{1,6}\s+", line)
+        ]
+        if not lines:
+            continue
+        text = " ".join(lines)
+        if re.match(r"^\s*\|?[-:| ]+\|?\s*$", text):
+            continue
+        text = re.sub(r"!\[([^\]]*)\]\([^)]*\)", r"\1", text)
+        text = re.sub(r"\[([^\]]+)\]\((?:<)?[^)\s>]+(?:>)?(?:\s+[^)]*)?\)", r"\1", text)
+        text = re.sub(r"`([^`]+)`", r"\1", text)
+        text = re.sub(r"[*_~>#]", "", text)
+        parser = _PlainText()
+        parser.feed(markdown.markdown(text, extensions=["extra"]))
+        plain = re.sub(r"\s+", " ", html.unescape(" ".join(parser.parts))).strip()
+        if plain:
+            paragraphs.append(plain)
+        if len(paragraphs) >= 2:
+            break
+    description = re.sub(r"\s+", " ", " ".join(paragraphs)).strip() or title.strip()
+    if len(description) <= max_length:
+        return description
+    clipped = description[: max_length + 1]
+    boundary = clipped.rfind(" ")
+    if boundary >= max_length // 2:
+        clipped = clipped[:boundary]
+    return clipped.rstrip(" ,;:-") + "…"
+
+
+def search_description_or_generate(description: str, markdown_text: str, title: str) -> str:
+    cleaned = re.sub(r"\s+", " ", description or "").strip()
+    return cleaned[:150].rstrip() if cleaned else generate_search_description(markdown_text, title)
 
 def _add_heading_ids(body: str, headings: list[dict[str, str]]) -> str:
     by_title = {}
@@ -203,12 +261,47 @@ def _sanitize_article_html(body: str) -> str:
 
 
 def _wrap_responsive_tables(body: str) -> str:
-    return re.sub(
-        r"<table\b([^>]*)>(.*?)</table>",
-        r'<div class="article-table-scroll" style="max-width:100%;overflow-x:auto;"><table\1>\2</table></div>',
-        body,
-        flags=re.I | re.S,
-    )
+    def wrap(match: re.Match[str]) -> str:
+        attributes = re.sub(r"\sstyle=(['\"]).*?\1", "", match.group(1), flags=re.I | re.S)
+        content = match.group(2)
+        table = f'<table{attributes} style="border-collapse:collapse;border:1px solid #94a3b8;width:100%;margin:16px 0;">'
+        content = re.sub(
+            r"<th\b([^>]*)>",
+            r'<th\1 style="border:1px solid #94a3b8;padding:8px 10px;background:#e2e8f0;color:#0f172a;text-align:left;">',
+            content,
+            flags=re.I,
+        )
+        content = re.sub(
+            r"<td\b([^>]*)>",
+            r'<td\1 style="border:1px solid #cbd5e1;padding:8px 10px;vertical-align:top;">',
+            content,
+            flags=re.I,
+        )
+        return (
+            '<div class="article-table-scroll" style="max-width:100%;overflow-x:auto;">'
+            + table + content + "</table></div>"
+        )
+
+    return re.sub(r"<table\b([^>]*)>(.*?)</table>", wrap, body, flags=re.I | re.S)
+
+
+def _separate_major_sections(body: str) -> str:
+    seen_section = False
+
+    def separator(match: re.Match[str]) -> str:
+        nonlocal seen_section
+        heading = html.unescape(re.sub(r"<[^>]+>", "", match.group(2))).strip()
+        if heading.casefold() == "table of contents":
+            return match.group(0)
+        prefix = (
+            '<hr style="border:0;border-top:1px solid #cbd5e1;margin:28px 0;">'
+            if seen_section
+            else ""
+        )
+        seen_section = True
+        return prefix + match.group(0)
+
+    return re.sub(r"(<h2\b[^>]*>)(.*?)(</h2>)", lambda match: separator(match), body, flags=re.I | re.S)
 def affiliate_box(product_name: str, tracking_url: str, disclosure: str) -> str:
     url = html.escape(tracking_url.strip(), quote=True)
     if not url.startswith(("https://","http://")): raise ValueError("Affiliate URL must begin with http:// or https://")
@@ -274,6 +367,7 @@ def render_article(markdown_text: str, title: str, primary_keyword: str="", *, i
     body = _prepare_image_figures(body)
     body = _sanitize_article_html(body)
     body = _wrap_responsive_tables(body)
+    body = _separate_major_sections(body)
     for token, diagram_html in diagrams.items():
         body = body.replace(token, f"</p>{_sanitize_article_html(diagram_html)}<p>")
     body = re.sub(r"<p>\s*</p>", "", body)

@@ -59,8 +59,10 @@ def init_db() -> None:
           meta_description TEXT NOT NULL DEFAULT '',
           markdown_body TEXT NOT NULL DEFAULT '', rendered_html TEXT NOT NULL DEFAULT '',
           schema_json TEXT NOT NULL DEFAULT '{}',
+          include_toc INTEGER NOT NULL DEFAULT 1, product_id INTEGER, affiliate_id INTEGER,
           status TEXT NOT NULL DEFAULT 'DRAFT' CHECK(status IN ('QUEUED','DRAFT','PAUSED','PUBLISHED')),
           blogger_post_id TEXT NOT NULL DEFAULT '', blogger_blog_id TEXT NOT NULL DEFAULT '',
+          blogger_post_url TEXT NOT NULL DEFAULT '',
           created_at TEXT NOT NULL, updated_at TEXT NOT NULL, published_at TEXT NOT NULL DEFAULT ''
         );
         CREATE INDEX IF NOT EXISTS idx_articles_status ON articles(status);
@@ -70,6 +72,7 @@ def init_db() -> None:
           revision_number INTEGER NOT NULL, title TEXT NOT NULL,
           meta_description TEXT NOT NULL DEFAULT '', markdown_body TEXT NOT NULL,
           rendered_html TEXT NOT NULL DEFAULT '',
+          include_toc INTEGER NOT NULL DEFAULT 1, product_id INTEGER, affiliate_id INTEGER,
           reason TEXT NOT NULL DEFAULT 'saved', created_at TEXT NOT NULL,
           FOREIGN KEY(article_id) REFERENCES articles(id) ON DELETE CASCADE,
           UNIQUE(article_id, revision_number)
@@ -124,9 +127,24 @@ def init_db() -> None:
         article_columns = {row["name"] for row in conn.execute("PRAGMA table_info(articles)").fetchall()}
         if "meta_description" not in article_columns:
             conn.execute("ALTER TABLE articles ADD COLUMN meta_description TEXT NOT NULL DEFAULT ''")
+        for name, definition in (
+            ("include_toc", "INTEGER NOT NULL DEFAULT 1"),
+            ("product_id", "INTEGER"),
+            ("affiliate_id", "INTEGER"),
+            ("blogger_post_url", "TEXT NOT NULL DEFAULT ''"),
+        ):
+            if name not in article_columns:
+                conn.execute(f"ALTER TABLE articles ADD COLUMN {name} {definition}")
         revision_columns = {row["name"] for row in conn.execute("PRAGMA table_info(article_revisions)").fetchall()}
         if "meta_description" not in revision_columns:
             conn.execute("ALTER TABLE article_revisions ADD COLUMN meta_description TEXT NOT NULL DEFAULT ''")
+        for name, definition in (
+            ("include_toc", "INTEGER NOT NULL DEFAULT 1"),
+            ("product_id", "INTEGER"),
+            ("affiliate_id", "INTEGER"),
+        ):
+            if name not in revision_columns:
+                conn.execute(f"ALTER TABLE article_revisions ADD COLUMN {name} {definition}")
         # Seed initial product if empty
         cur = conn.execute("SELECT COUNT(*) AS c FROM user_products")
         if cur.fetchone()["c"] == 0:
@@ -148,46 +166,59 @@ def save_article(*, topic: str, primary_keyword: str, title: str, markdown_body:
                  rendered_html: str = "", schema_json: dict[str, Any] | str | None = None,
                  status: str = "DRAFT", article_id: int | None = None,
                  blogger_post_id: str = "", blogger_blog_id: str = "",
-                 meta_description: str | None = None) -> int:
+                 blogger_post_url: str = "", meta_description: str | None = None,
+                 include_toc: bool = True, product_id: int | None = None,
+                 affiliate_id: int | None = None) -> int:
     if status not in {"QUEUED","DRAFT","PAUSED","PUBLISHED"}: raise ValueError(f"Unsupported status: {status}")
     now = utc_now()
     schema_text = schema_json if isinstance(schema_json, str) else json.dumps(schema_json or {}, ensure_ascii=False)
     with connection() as conn:
         if article_id is not None:
             previous = conn.execute(
-                "SELECT title,meta_description,markdown_body,rendered_html FROM articles WHERE id=?",
+                """SELECT title,meta_description,markdown_body,rendered_html,
+                   include_toc,product_id,affiliate_id FROM articles WHERE id=?""",
                 (article_id,),
             ).fetchone()
             if previous is None:
                 raise ValueError(f"Article {article_id} does not exist")
             cur = conn.execute("""UPDATE articles SET topic=?,primary_keyword=?,title=?,
               meta_description=COALESCE(?,meta_description),markdown_body=?,rendered_html=?,schema_json=?,status=?,
+              include_toc=?,product_id=?,affiliate_id=?,
               blogger_post_id=CASE WHEN ?='' THEN blogger_post_id ELSE ? END,
-              blogger_blog_id=CASE WHEN ?='' THEN blogger_blog_id ELSE ? END,updated_at=?,
+              blogger_blog_id=CASE WHEN ?='' THEN blogger_blog_id ELSE ? END,
+              blogger_post_url=CASE WHEN ?='' THEN blogger_post_url ELSE ? END,updated_at=?,
               published_at=CASE WHEN ?='PUBLISHED' AND published_at='' THEN ? ELSE published_at END WHERE id=?""",
               (topic,primary_keyword,title,meta_description,markdown_body,rendered_html,schema_text,status,
-               blogger_post_id,blogger_post_id,blogger_blog_id,blogger_blog_id,now,status,now,article_id))
+               int(include_toc),product_id,affiliate_id,blogger_post_id,blogger_post_id,
+               blogger_blog_id,blogger_blog_id,blogger_post_url,blogger_post_url,now,status,now,article_id))
             if cur.rowcount == 0: raise ValueError(f"Article {article_id} does not exist")
             if (
                 previous["title"] != title
                 or (meta_description is not None and previous["meta_description"] != meta_description)
                 or previous["markdown_body"] != markdown_body
                 or previous["rendered_html"] != rendered_html
+                or previous["include_toc"] != int(include_toc)
+                or previous["product_id"] != product_id
+                or previous["affiliate_id"] != affiliate_id
             ):
                 _save_article_revision(
                     conn, article_id, title,
                     meta_description if meta_description is not None else previous["meta_description"],
-                    markdown_body, rendered_html, "saved", now
+                    markdown_body, rendered_html, "saved", now,
+                    include_toc, product_id, affiliate_id,
                 )
             return article_id
         cur = conn.execute("""INSERT INTO articles(topic,primary_keyword,title,meta_description,markdown_body,rendered_html,
-          schema_json,status,blogger_post_id,blogger_blog_id,created_at,updated_at,published_at)
-          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-          (topic,primary_keyword,title,meta_description or "",markdown_body,rendered_html,schema_text,status,blogger_post_id,
-           blogger_blog_id,now,now,now if status == "PUBLISHED" else ""))
+          schema_json,include_toc,product_id,affiliate_id,status,blogger_post_id,blogger_blog_id,blogger_post_url,
+          created_at,updated_at,published_at)
+          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+          (topic,primary_keyword,title,meta_description or "",markdown_body,rendered_html,schema_text,
+           int(include_toc),product_id,affiliate_id,status,blogger_post_id,blogger_blog_id,blogger_post_url,
+           now,now,now if status == "PUBLISHED" else ""))
         new_id = int(cur.lastrowid)
         _save_article_revision(
-            conn, new_id, title, meta_description or "", markdown_body, rendered_html, "created", now
+            conn, new_id, title, meta_description or "", markdown_body, rendered_html, "created", now,
+            include_toc, product_id, affiliate_id,
         )
         return new_id
 
@@ -200,6 +231,9 @@ def _save_article_revision(
     rendered_html: str,
     reason: str,
     created_at: str,
+    include_toc: bool = True,
+    product_id: int | None = None,
+    affiliate_id: int | None = None,
 ) -> None:
     revision_number = int(conn.execute(
         "SELECT COALESCE(MAX(revision_number),0)+1 FROM article_revisions WHERE article_id=?",
@@ -207,15 +241,18 @@ def _save_article_revision(
     ).fetchone()[0])
     conn.execute(
         """INSERT INTO article_revisions
-        (article_id,revision_number,title,meta_description,markdown_body,rendered_html,reason,created_at)
-        VALUES(?,?,?,?,?,?,?,?)""",
-        (article_id,revision_number,title,meta_description,markdown_body,rendered_html,reason,created_at),
+        (article_id,revision_number,title,meta_description,markdown_body,rendered_html,
+         include_toc,product_id,affiliate_id,reason,created_at)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+        (article_id,revision_number,title,meta_description,markdown_body,rendered_html,
+         int(include_toc),product_id,affiliate_id,reason,created_at),
     )
 
 def list_article_revisions(article_id: int, limit: int = 50) -> list[dict[str, Any]]:
     with connection() as conn:
         rows = conn.execute(
-            """SELECT id,article_id,revision_number,title,meta_description,markdown_body,rendered_html,reason,created_at
+            """SELECT id,article_id,revision_number,title,meta_description,markdown_body,rendered_html,
+               include_toc,product_id,affiliate_id,reason,created_at
             FROM article_revisions WHERE article_id=?
             ORDER BY revision_number DESC LIMIT ?""",
             (article_id,max(1,min(limit,100))),
@@ -494,3 +531,7 @@ def get_system_credential(key: str) -> str | None:
     with connection() as conn:
         row = conn.execute("SELECT value FROM system_credentials WHERE key=?", (key,)).fetchone()
         return row["value"] if row else None
+
+def delete_system_credential(key: str) -> None:
+    with connection() as conn:
+        conn.execute("DELETE FROM system_credentials WHERE key=?", (key,))

@@ -351,9 +351,20 @@
                 <input type="checkbox" id="toggle-ebook">
                 <span>Product</span>
               </label>
+              <label class="editor-option-label" for="editor-product-select">Saved product</label>
+              <select id="editor-product-select" class="form-control editor-option-select" disabled>
+                <option value="">Select a saved product</option>
+              </select>
+              <label class="editor-option-label" for="editor-affiliate-select">Affiliate</label>
+              <select id="editor-affiliate-select" class="form-control editor-option-select">
+                <option value="">No affiliate</option>
+              </select>
               <button class="btn btn-secondary btn-sm" id="btn-refresh-preview">Refresh</button>
-              <button class="btn btn-primary btn-sm" id="btn-save-db">Save Draft</button>
+              <button class="btn btn-primary btn-sm" id="btn-save-db">Save Locally</button>
               <button class="btn btn-accent btn-sm" id="btn-upload-blogger">Create Blogger Draft</button>
+              <button class="btn btn-secondary btn-sm hidden" id="btn-verify-blogger">Verify Blogger Post</button>
+              <button class="btn btn-secondary btn-sm hidden" id="btn-update-blogger">Update Blogger Post</button>
+              <button class="btn btn-primary btn-sm hidden" id="btn-publish-blogger">Publish Blogger Draft</button>
               <button class="btn btn-secondary btn-sm hidden" id="btn-delete-local-copy">Delete Local Copy</button>
             </div>
           </div>
@@ -418,15 +429,34 @@
         </div>
       </section>
 
-      <!-- TAB 5: FREE STOCK IMAGE SEARCH -->
+      <!-- TAB 5: IMAGE STUDIO -->
       <section class="tab-pane" id="tab-images">
         <div class="card glass-card max-w-800 mx-auto">
           <div class="card-header">
-            <h2>Free Stock Image Search</h2>
-            <span class="badge green">No image-generation spend</span>
+            <h2>Image Studio</h2>
+            <span class="badge green">Free generation · best effort</span>
           </div>
-          <p class="section-desc">Search Pexels or Unsplash, inspect the results, and insert a selected image with photographer/source attribution. Vercel API keys are required for search; image URLs are embedded directly from the providers. Or leave the article image-free.</p>
+          <p class="section-desc">Generate a topic-specific featured illustration with Pollinations AI or search Pexels/Unsplash. Review and select an image before inserting it. Generated images are provider-hosted: this app has no durable image storage, so verify availability in Blogger before relying on a generated URL. Pollinations may rate-limit requests.</p>
           <p class="section-desc">Photos provided by <a href="https://www.pexels.com/" target="_blank" rel="noopener noreferrer">Pexels</a> and <a href="https://unsplash.com/" target="_blank" rel="noopener noreferrer">Unsplash</a>.</p>
+
+          <div class="info-callout">
+            <h4>Generate a featured illustration</h4>
+            <p class="section-desc">The article topic is sent to Pollinations to generate an image. It may take a minute; a provider failure does not block drafting.</p>
+            <div class="form-group">
+              <label for="generated-image-topic">Article topic</label>
+              <input type="text" id="generated-image-topic" class="form-control" maxlength="500"
+                placeholder="Enter a specific article topic">
+            </div>
+            <button class="btn btn-primary" id="btn-generate-featured-image" type="button">
+              <span class="btn-spinner hidden" id="image-generation-spinner"></span>
+              Generate featured image
+            </button>
+            <p id="image-generation-status" class="section-desc" aria-live="polite"></p>
+            <div id="generated-image-preview" class="hidden">
+              <img id="generated-image" alt="" loading="lazy">
+              <button class="btn btn-secondary mt-10" id="btn-select-generated-image" type="button">Select this generated image</button>
+            </div>
+          </div>
 
           <div class="form-group">
             <label for="image-search-provider">Stock image source</label>
@@ -601,6 +631,7 @@
           <div class="action-buttons-group">
             <button class="btn btn-secondary" id="btn-refresh-blogs">Refresh Blog List</button>
             <button class="btn btn-primary" id="btn-login-google-alt">Connect Google Account</button>
+            <button class="btn btn-secondary hidden" id="btn-disconnect-google" type="button">Disconnect Google Account</button>
           </div>
 
           <div class="info-callout mt-20">

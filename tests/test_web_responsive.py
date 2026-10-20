@@ -64,6 +64,14 @@ class ResponsiveWebAppTests(unittest.TestCase):
             'id="editor-internal-link"',
             'id="internal-link-preview"',
             'id="btn-preview-navigation"',
+            'id="editor-product-select"',
+            'id="editor-affiliate-select"',
+            'id="btn-verify-blogger"',
+            'id="btn-update-blogger"',
+            'id="btn-publish-blogger"',
+            'id="btn-disconnect-google"',
+            'id="btn-generate-featured-image"',
+            'id="generated-image-topic"',
         ):
             self.assertIn(control, page.text)
 

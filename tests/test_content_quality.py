@@ -235,6 +235,252 @@ class ContentQualityApiTests(unittest.TestCase):
         self.assertEqual(client.post("/api/auth/login", json={"password": "unused"}).status_code, 404)
         self.assertEqual(client.post("/api/auth/logout").status_code, 404)
 
+    def test_render_and_save_use_the_same_server_renderer_and_persist_editor_options(self):
+        product_id = db.save_product(
+            title="Selected Python guide",
+            url="https://products.example.test/python",
+            description="A selected guide.",
+        )
+        markdown = "## Installation\n\nInstall Python using the official installer."
+        preview = self.client.post("/api/render", json={
+            "markdown_text": markdown,
+            "title": "Python setup",
+            "include_toc": False,
+            "include_product": True,
+            "product_id": product_id,
+        })
+        self.assertEqual(preview.status_code, 200, preview.text)
+        self.assertEqual(preview.json()["product_id"], product_id)
+        self.assertFalse(preview.json()["include_toc"])
+        self.assertIn("Selected Python guide", preview.json()["rendered_html"])
+
+        saved = self.client.post("/api/articles", json={
+            "topic": "Python setup",
+            "primary_keyword": "Python",
+            "title": "Python setup",
+            "markdown_body": markdown,
+            "rendered_html": "<script>must not be trusted</script>",
+            "include_toc": False,
+            "product_id": product_id,
+        })
+        self.assertEqual(saved.status_code, 200, saved.text)
+        article = self.client.get(f"/api/articles/{saved.json()['id']}").json()
+        self.assertFalse(article["include_toc"])
+        self.assertEqual(article["product_id"], product_id)
+        self.assertIn("Selected Python guide", article["rendered_html"])
+        self.assertNotIn("<script>", article["rendered_html"])
+        self.assertEqual(
+            db.list_article_revisions(article["id"])[0]["product_id"],
+            product_id,
+        )
+        self.assertFalse(db.list_article_revisions(article["id"])[0]["include_toc"])
+
+    def test_pollinations_generation_endpoint_handles_valid_and_failed_provider_results(self):
+        generated = {
+            "image_url": "https://image.pollinations.ai/prompt/example",
+            "width": 768,
+            "height": 512,
+            "provider": "Pollinations AI",
+            "hosting": "provider-hosted",
+            "warning": "Not mirrored to durable storage.",
+        }
+        with patch.object(api_module, "generate_pollinations_image", return_value=generated) as generator:
+            response = self.client.post("/api/generate-image", json={"topic": "Python API design"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), generated)
+        generator.assert_called_once_with("Python API design", width=768, height=512)
+
+        with patch.object(
+            api_module,
+            "generate_pollinations_image",
+            side_effect=RuntimeError("Pollinations rate limit reached."),
+        ):
+            limited = self.client.post("/api/generate-image", json={"topic": "Python API design"})
+        self.assertEqual(limited.status_code, 502)
+        self.assertIn("rate limit", limited.json()["detail"])
+
+    def test_blogger_draft_creation_persists_id_and_verifies_returned_post(self):
+        saved_article = self.client.post("/api/articles", json={
+            "topic": "Python setup",
+            "primary_keyword": "Python",
+            "title": "Python setup",
+            "markdown_body": "## Install\n\nInstall the runtime.",
+        })
+        self.assertEqual(saved_article.status_code, 200, saved_article.text)
+        article_id = saved_article.json()["id"]
+        html = db.get_article(article_id)["rendered_html"]
+        post = {
+            "id": "post-42",
+            "url": "https://blog.example.test/python-setup",
+            "title": "Python setup",
+            "content": html,
+            "status": "DRAFT",
+            "labels": ["Python", "Python setup"],
+        }
+        with (
+            patch.object(api_module, "resolve_current_credentials", return_value=(object(), {})),
+            patch.object(api_module, "list_posts", return_value=[]),
+            patch.object(api_module, "create_draft", return_value=post) as create,
+            patch.object(api_module, "get_post", return_value=post),
+        ):
+            response = self.client.post("/api/blogger/draft", json={
+                "blog_id": "blog-1",
+                "article_id": article_id,
+                "confirmed": True,
+            })
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertTrue(response.json()["verified"], response.json())
+        create.assert_called_once()
+        self.assertEqual(create.call_args.kwargs["labels"], ["Python", "Python setup"])
+        saved = db.get_article(article_id)
+        self.assertEqual(saved["blogger_post_id"], "post-42")
+        self.assertEqual(saved["blogger_post_url"], post["url"])
+
+    def test_publish_requires_confirmation_before_google_access(self):
+        with patch.object(api_module, "resolve_current_credentials") as credentials_loader:
+            response = self.client.post("/api/blogger/posts/publish", json={
+                "blog_id": "blog-1",
+                "post_id": "post-1",
+                "article_id": 1,
+                "confirmed": False,
+            })
+        self.assertEqual(response.status_code, 400)
+        credentials_loader.assert_not_called()
+
+    def test_verify_blogger_post_reads_and_compares_the_linked_post(self):
+        saved = self.save_article()
+        article_id = saved.json()["id"]
+        article = db.get_article(article_id)
+        db.save_article(
+            topic=article["topic"],
+            primary_keyword=article["primary_keyword"],
+            title=article["title"],
+            markdown_body=article["markdown_body"],
+            rendered_html=article["rendered_html"],
+            article_id=article_id,
+            blogger_post_id="post-verify",
+            blogger_blog_id="blog-1",
+        )
+        post = {
+            "id": "post-verify",
+            "url": "https://blog.example.test/verified",
+            "title": article["title"],
+            "content": article["rendered_html"],
+            "status": "DRAFT",
+            "labels": ["Python testing"],
+        }
+        with (
+            patch.object(api_module, "resolve_current_credentials", return_value=(object(), {})),
+            patch.object(api_module, "get_post", return_value=post) as retrieve,
+        ):
+            response = self.client.post("/api/blogger/posts/verify", json={
+                "blog_id": "blog-1",
+                "post_id": "post-verify",
+                "article_id": article_id,
+            })
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertTrue(response.json()["success"])
+        retrieve.assert_called_once()
+
+    def test_confirmed_publish_is_read_back_verified_before_local_status_changes(self):
+        saved = self.save_article()
+        article_id = saved.json()["id"]
+        article = db.get_article(article_id)
+        live_post = {
+            "id": "post-published",
+            "url": "https://blog.example.test/published",
+            "title": article["title"],
+            "content": article["rendered_html"],
+            "status": "LIVE",
+        }
+        with (
+            patch.object(api_module, "resolve_current_credentials", return_value=(object(), {})),
+            patch.object(api_module, "publish_draft") as publish,
+            patch.object(api_module, "get_post", return_value=live_post),
+        ):
+            response = self.client.post("/api/blogger/posts/publish", json={
+                "blog_id": "blog-1",
+                "post_id": "post-published",
+                "article_id": article_id,
+                "confirmed": True,
+            })
+        self.assertEqual(response.status_code, 409)
+        publish.assert_not_called()
+
+        db.save_article(
+            topic=article["topic"],
+            primary_keyword=article["primary_keyword"],
+            title=article["title"],
+            markdown_body=article["markdown_body"],
+            rendered_html=article["rendered_html"],
+            article_id=article_id,
+            blogger_post_id="post-published",
+            blogger_blog_id="blog-1",
+        )
+        with (
+            patch.object(api_module, "resolve_current_credentials", return_value=(object(), {})),
+            patch.object(api_module, "publish_draft") as publish,
+            patch.object(api_module, "get_post", return_value=live_post),
+        ):
+            response = self.client.post("/api/blogger/posts/publish", json={
+                "blog_id": "blog-1",
+                "post_id": "post-published",
+                "article_id": article_id,
+                "confirmed": True,
+            })
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertTrue(response.json()["success"])
+        self.assertEqual(db.get_article(article_id)["status"], "PUBLISHED")
+        self.assertEqual(db.get_article(article_id)["blogger_post_url"], live_post["url"])
+        publish.assert_called_once()
+
+    def test_live_post_update_requires_confirmed_local_link_and_verifies_result(self):
+        saved = self.save_article()
+        article_id = saved.json()["id"]
+        article = db.get_article(article_id)
+        db.save_article(
+            topic=article["topic"],
+            primary_keyword=article["primary_keyword"],
+            title=article["title"],
+            markdown_body=article["markdown_body"],
+            rendered_html=article["rendered_html"],
+            article_id=article_id,
+            blogger_post_id="post-live",
+            blogger_blog_id="blog-1",
+            blogger_post_url="https://blog.example.test/live",
+        )
+        live_post = {
+            "id": "post-live",
+            "url": "https://blog.example.test/live",
+            "title": article["title"],
+            "content": article["rendered_html"],
+            "status": "LIVE",
+        }
+        with (
+            patch.object(api_module, "resolve_current_credentials", return_value=(object(), {})),
+            patch.object(api_module, "get_post", side_effect=[live_post, live_post]),
+            patch.object(api_module, "update_live_post_content") as update,
+        ):
+            response = self.client.post("/api/blogger/posts/update", json={
+                "blog_id": "blog-1",
+                "post_id": "post-live",
+                "article_id": article_id,
+                "confirmed": True,
+            })
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertTrue(response.json()["success"])
+        update.assert_called_once()
+
+    def test_google_disconnect_removes_only_saved_google_credentials(self):
+        db.save_system_credential("google_api_token", '{"token":"test-token"}')
+        db.save_system_credential("google_user", '{"email":"owner@example.test"}')
+        db.save_system_credential("other_integration", "keep")
+        response = self.client.post("/api/oauth/disconnect")
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(db.get_system_credential("google_api_token"))
+        self.assertIsNone(db.get_system_credential("google_user"))
+        self.assertEqual(db.get_system_credential("other_integration"), "keep")
+
     def test_google_token_headers_are_ignored_and_oauth_callback_does_not_return_tokens(self):
         token = "server-only-test-google-token"
         client = TestClient(app)
@@ -388,11 +634,29 @@ class ContentQualityMigrationTests(unittest.TestCase):
                     updated_at TEXT NOT NULL,
                     published_at TEXT NOT NULL DEFAULT ''
                 )""")
-                connection.execute(
+                connection.execute("""CREATE TABLE article_revisions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    article_id INTEGER NOT NULL,
+                    revision_number INTEGER NOT NULL,
+                    title TEXT NOT NULL,
+                    meta_description TEXT NOT NULL DEFAULT '',
+                    markdown_body TEXT NOT NULL,
+                    rendered_html TEXT NOT NULL DEFAULT '',
+                    reason TEXT NOT NULL DEFAULT 'saved',
+                    created_at TEXT NOT NULL,
+                    UNIQUE(article_id, revision_number)
+                )""")
+                cursor = connection.execute(
                     """INSERT INTO articles
-                    (topic,primary_keyword,title,markdown_body,created_at,updated_at)
-                    VALUES(?,?,?,?,?,?)""",
-                    ("Python","Python","Existing draft","# Existing draft","2025-01-01","2025-01-01"),
+                    (topic,primary_keyword,title,markdown_body,blogger_post_id,blogger_blog_id,created_at,updated_at)
+                    VALUES(?,?,?,?,?,?,?,?)""",
+                    ("Python","Python","Existing draft","# Existing draft","legacy-post","legacy-blog","2025-01-01","2025-01-01"),
+                )
+                connection.execute(
+                    """INSERT INTO article_revisions
+                    (article_id,revision_number,title,markdown_body,created_at)
+                    VALUES(?,?,?,?,?)""",
+                    (cursor.lastrowid,1,"Existing draft","# Existing revision","2025-01-01"),
                 )
                 connection.commit()
             finally:
@@ -402,6 +666,9 @@ class ContentQualityMigrationTests(unittest.TestCase):
                 saved = db.get_article(1)
                 self.assertEqual(saved["markdown_body"], "# Existing draft")
                 self.assertEqual(saved["meta_description"], "")
+                self.assertEqual(saved["blogger_post_id"], "legacy-post")
+                self.assertEqual(saved["blogger_blog_id"], "legacy-blog")
+                self.assertEqual(saved["include_toc"], 1)
                 db.save_article(
                     topic=saved["topic"],
                     primary_keyword=saved["primary_keyword"],
@@ -411,7 +678,11 @@ class ContentQualityMigrationTests(unittest.TestCase):
                     article_id=1,
                 )
                 self.assertEqual(db.get_article(1)["meta_description"], "An existing draft with preserved content.")
-                self.assertEqual(db.list_article_revisions(1)[0]["revision_number"], 1)
+                revisions = db.list_article_revisions(1)
+                self.assertEqual([revision["revision_number"] for revision in revisions], [2, 1])
+                self.assertEqual(revisions[-1]["markdown_body"], "# Existing revision")
+                self.assertEqual(revisions[-1]["include_toc"], 1)
+                self.assertIsNone(revisions[-1]["product_id"])
 
 
 if __name__ == "__main__":

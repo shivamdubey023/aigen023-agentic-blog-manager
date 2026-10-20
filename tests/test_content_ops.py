@@ -5,11 +5,14 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from core import database as db
+from core.image_generation import generate_pollinations_image
 from core.stock_images import provider_status, search_stock_images
 from property_a_blog.blogger_client import (
     _create_oauth_state,
     _read_oauth_state,
+    CredentialLoadError,
     finish_oauth,
+    get_credentials,
     get_redirect_uri,
     start_oauth,
     update_live_post_navigation,
@@ -43,6 +46,10 @@ Intro paragraph.
 | Feature | Value |
 | --- | --- |
 | Runtime | Python |
+
+## Deploy
+
+Check the deployment.
 """
         body, _ = render_article(source, "Guide")
         self.assertIn("<h2", body)
@@ -52,7 +59,10 @@ Intro paragraph.
         self.assertIn("<ol>", body)
         self.assertIn('<div class="article-table-scroll"', body)
         self.assertIn("<thead>", body)
-        self.assertIn("<th>Feature</th>", body)
+        self.assertIn(">Feature</th>", body)
+        self.assertIn("border-collapse:collapse", body)
+        self.assertIn("padding:8px 10px", body)
+        self.assertIn('<hr style="border:0;border-top:1px solid #cbd5e1;margin:28px 0;">', body)
 
     def test_images_preserve_alt_caption_and_safe_attribution(self):
         body, _ = render_article(
@@ -240,6 +250,39 @@ class StockImageTests(unittest.TestCase):
     def test_provider_status_only_reports_presence(self, _pexels, _unsplash):
         self.assertEqual(provider_status(), {"pexels": False, "unsplash": True})
 
+class PollinationsImageTests(unittest.TestCase):
+    @patch("core.image_generation.requests.get")
+    def test_generation_validates_image_bytes_and_returns_provider_hosted_warning(self, get):
+        response = Mock(ok=True, status_code=200, url="https://image.pollinations.ai/prompt/example")
+        response.headers = {"Content-Type": "image/jpeg"}
+        response.content = b"\xff\xd8\xff" + b"image"
+        get.return_value = response
+        result = generate_pollinations_image("Python API architecture")
+        self.assertEqual(result["provider"], "Pollinations AI")
+        self.assertEqual(result["hosting"], "provider-hosted")
+        self.assertIn("no durable image storage", result["warning"])
+        get.assert_called_once()
+
+    @patch("core.image_generation.requests.get")
+    def test_generation_reports_rate_limit_and_invalid_image_responses(self, get):
+        get.return_value = Mock(ok=False, status_code=429)
+        with self.assertRaisesRegex(RuntimeError, "rate limit"):
+            generate_pollinations_image("Python")
+        get.return_value = Mock(
+            ok=True,
+            status_code=200,
+            headers={"Content-Type": "text/html"},
+            content=b"<html>not an image</html>",
+        )
+        with self.assertRaisesRegex(RuntimeError, "invalid image"):
+            generate_pollinations_image("Python")
+
+    def test_generation_rejects_empty_topics_and_unsupported_dimensions(self):
+        with self.assertRaises(ValueError):
+            generate_pollinations_image(" ")
+        with self.assertRaisesRegex(ValueError, "dimensions"):
+            generate_pollinations_image("Python", 769, 512)
+
 class NavigationTests(unittest.TestCase):
     def test_live_posts_are_ordered_by_published_time_and_drafts_are_excluded(self):
         posts = [
@@ -312,6 +355,22 @@ class OAuthTests(unittest.TestCase):
     def test_redirect_uri_can_be_configured_for_local_development(self):
         with patch.dict(os.environ, {"GOOGLE_OAUTH_REDIRECT_URI": "http://localhost:8501/"}):
             self.assertEqual(get_redirect_uri(), "http://localhost:8501/")
+
+    @patch("property_a_blog.blogger_client.Credentials.from_authorized_user_info")
+    @patch.object(db, "save_system_credential")
+    @patch.object(db, "get_system_credential", return_value='{"token":"saved","refresh_token":"retained"}')
+    def test_temporary_refresh_failure_retains_saved_credentials(self, _stored, save_credential, from_info):
+        credentials = SimpleNamespace(
+            expired=True,
+            refresh_token="retained",
+            valid=False,
+            refresh=Mock(side_effect=requests.Timeout("temporary network failure")),
+        )
+        from_info.return_value = credentials
+        with self.assertRaisesRegex(CredentialLoadError, "temporarily") as raised:
+            get_credentials({})
+        self.assertFalse(raised.exception.reconnect_required)
+        save_credential.assert_not_called()
 
     @patch("requests.get")
     @patch("property_a_blog.blogger_client.Flow.from_client_config")

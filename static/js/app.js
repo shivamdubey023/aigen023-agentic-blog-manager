@@ -18,6 +18,11 @@ const state = {
     diagramImageUrl: '',
     bloggerPostId: '',
     bloggerBlogId: '',
+    bloggerPostUrl: '',
+    status: 'DRAFT',
+    includeToc: true,
+    productId: null,
+    affiliateId: null,
   },
   selectedStockImage: null,
   trendingPick: null,
@@ -44,6 +49,7 @@ const el = {
   oauthRedirectDisplay: document.getElementById('oauth-redirect-display'),
   btnCopyRedirect: document.getElementById('btn-copy-redirect'),
   btnLoginGoogleAlt: document.getElementById('btn-login-google-alt'),
+  btnDisconnectGoogle: document.getElementById('btn-disconnect-google'),
 
   // Autopilot
   currentTrendingTitle: document.getElementById('current-trending-title'),
@@ -97,6 +103,13 @@ const el = {
   // Image Studio
   imageSearchProvider: document.getElementById('image-search-provider'),
   imageSearchQuery: document.getElementById('image-search-query'),
+  generatedImageTopic: document.getElementById('generated-image-topic'),
+  btnGenerateFeaturedImage: document.getElementById('btn-generate-featured-image'),
+  imageGenerationSpinner: document.getElementById('image-generation-spinner'),
+  imageGenerationStatus: document.getElementById('image-generation-status'),
+  generatedImagePreview: document.getElementById('generated-image-preview'),
+  generatedImage: document.getElementById('generated-image'),
+  btnSelectGeneratedImage: document.getElementById('btn-select-generated-image'),
   imageProviderStatus: document.getElementById('image-provider-status'),
   stockImageResults: document.getElementById('stock-image-results'),
   btnSearchStock: document.getElementById('btn-search-stock'),
@@ -115,6 +128,11 @@ const el = {
   btnRefreshPreview: document.getElementById('btn-refresh-preview'),
   btnSaveDb: document.getElementById('btn-save-db'),
   btnUploadBlogger: document.getElementById('btn-upload-blogger'),
+  btnVerifyBlogger: document.getElementById('btn-verify-blogger'),
+  btnUpdateBlogger: document.getElementById('btn-update-blogger'),
+  btnPublishBlogger: document.getElementById('btn-publish-blogger'),
+  editorProductSelect: document.getElementById('editor-product-select'),
+  editorAffiliateSelect: document.getElementById('editor-affiliate-select'),
   btnDeleteLocal: document.getElementById('btn-delete-local-copy'),
   previewRendered: document.getElementById('preview-content-rendered'),
   previewHtml: document.getElementById('preview-content-html'),
@@ -418,6 +436,8 @@ if (el.btnRunAutopilot) {
       state.currentArticle.diagramImageUrl = '';
       state.currentArticle.bloggerPostId = '';
       state.currentArticle.bloggerBlogId = '';
+      state.currentArticle.productId = includeProduct ? Number(productId) : null;
+      state.currentArticle.affiliateId = includeAffiliate ? Number(affiliateId) : null;
 
       el.autopilotResultBody.innerHTML = `
         <div style="display:flex; flex-direction:column; gap:14px;">
@@ -614,10 +634,24 @@ function loadArticleIntoEditor(article) {
     markdown: article.markdown || article.markdown_body || '',
     bloggerPostId: article.bloggerPostId || article.blogger_post_id || '',
     bloggerBlogId: article.bloggerBlogId || article.blogger_blog_id || '',
+    bloggerPostUrl: article.bloggerPostUrl || article.blogger_post_url || '',
+    status: article.status || state.currentArticle.status || 'DRAFT',
+    includeToc: article.include_toc ?? article.includeToc ?? state.currentArticle.includeToc ?? true,
+    productId: article.product_id ?? article.productId ?? state.currentArticle.productId ?? null,
+    affiliateId: article.affiliate_id ?? article.affiliateId ?? state.currentArticle.affiliateId ?? null,
   };
   el.editorTitle.value = article.title || '';
   el.editorMetaDescription.value = state.currentArticle.metaDescription;
   el.markdownEditor.value = state.currentArticle.markdown;
+  el.toggleToc.checked = Boolean(state.currentArticle.includeToc);
+  el.toggleEbook.checked = state.currentArticle.productId !== null && state.currentArticle.productId !== undefined;
+  if (el.editorProductSelect) {
+    el.editorProductSelect.disabled = !el.toggleEbook.checked;
+    el.editorProductSelect.value = state.currentArticle.productId || '';
+  }
+  if (el.editorAffiliateSelect) {
+    el.editorAffiliateSelect.value = state.currentArticle.affiliateId || '';
+  }
   resetQualityReview('Draft changed or loaded; run checks before recording a review.');
   updateLocalDeleteButton();
   renderPreview();
@@ -821,6 +855,9 @@ if (el.btnQualityRevisions) {
             title: revision.title,
             meta_description: revision.meta_description,
             markdown_body: revision.markdown_body,
+            include_toc: revision.include_toc,
+            product_id: revision.product_id,
+            affiliate_id: revision.affiliate_id,
           });
           showToast(`Revision ${revision.revision_number} loaded. Save it as a new revision after editing.`, 'info');
         });
@@ -833,8 +870,12 @@ if (el.btnQualityRevisions) {
 
 function updateLocalDeleteButton() {
   if (!el.btnDeleteLocal) return;
-  const canDelete = Boolean(state.currentArticle.id && state.currentArticle.bloggerPostId);
-  el.btnDeleteLocal.classList.toggle('hidden', !canDelete);
+  const linked = Boolean(state.currentArticle.id && state.currentArticle.bloggerPostId && state.currentArticle.bloggerBlogId);
+  el.btnDeleteLocal.classList.toggle('hidden', !linked);
+  el.btnUploadBlogger?.classList.toggle('hidden', Boolean(state.currentArticle.bloggerPostId));
+  el.btnVerifyBlogger?.classList.toggle('hidden', !linked);
+  el.btnUpdateBlogger?.classList.toggle('hidden', !linked);
+  el.btnPublishBlogger?.classList.toggle('hidden', !linked || state.currentArticle.status === 'PUBLISHED');
 }
 
 async function renderPreview() {
@@ -859,6 +900,12 @@ async function renderPreview() {
         meta_description: el.editorMetaDescription.value.trim(),
         include_toc: el.toggleToc.checked,
         include_product: el.toggleEbook.checked,
+        product_id: el.toggleEbook.checked && el.editorProductSelect?.value
+          ? Number(el.editorProductSelect.value)
+          : null,
+        affiliate_id: el.editorAffiliateSelect?.value
+          ? Number(el.editorAffiliateSelect.value)
+          : null,
         featured_image_url: state.currentArticle.featuredImageUrl || null,
         section_image_url: state.currentArticle.diagramImageUrl || null,
       }),
@@ -868,6 +915,10 @@ async function renderPreview() {
 
     state.currentArticle.renderedHtml = data.rendered_html;
     state.currentArticle.schema = data.schema;
+    state.currentArticle.metaDescription = data.meta_description || '';
+    state.currentArticle.includeToc = data.include_toc;
+    state.currentArticle.productId = data.product_id;
+    state.currentArticle.affiliateId = data.affiliate_id;
 
     el.previewRendered.innerHTML = data.rendered_html;
     el.rawHtmlViewer.value = data.rendered_html;
@@ -894,7 +945,12 @@ if (el.markdownEditor) {
 if (el.editorTitle) el.editorTitle.addEventListener('input', () => resetQualityReview());
 if (el.editorMetaDescription) el.editorMetaDescription.addEventListener('input', () => resetQualityReview());
 if (el.toggleToc) el.toggleToc.addEventListener('change', renderPreview);
-if (el.toggleEbook) el.toggleEbook.addEventListener('change', renderPreview);
+if (el.toggleEbook) el.toggleEbook.addEventListener('change', () => {
+  if (el.editorProductSelect) el.editorProductSelect.disabled = !el.toggleEbook.checked;
+  renderPreview();
+});
+if (el.editorProductSelect) el.editorProductSelect.addEventListener('change', renderPreview);
+if (el.editorAffiliateSelect) el.editorAffiliateSelect.addEventListener('change', renderPreview);
 
 async function saveCurrentArticle() {
   const title = el.editorTitle.value.trim();
@@ -910,9 +966,14 @@ async function saveCurrentArticle() {
       title,
       meta_description: el.editorMetaDescription.value.trim(),
       markdown_body: markdown,
-      rendered_html: state.currentArticle.renderedHtml,
-      schema_json: state.currentArticle.schema,
       article_id: state.currentArticle.id,
+      include_toc: el.toggleToc.checked,
+      product_id: el.toggleEbook.checked && el.editorProductSelect.value
+        ? Number(el.editorProductSelect.value)
+        : null,
+      affiliate_id: el.editorAffiliateSelect.value
+        ? Number(el.editorAffiliateSelect.value)
+        : null,
     }),
   });
   const data = await response.json();
@@ -920,6 +981,13 @@ async function saveCurrentArticle() {
   state.currentArticle.id = data.id;
   state.currentArticle.title = title;
   state.currentArticle.markdown = markdown;
+  state.currentArticle.renderedHtml = data.rendered_html;
+  state.currentArticle.schema = data.schema;
+  state.currentArticle.metaDescription = data.meta_description || '';
+  state.currentArticle.includeToc = el.toggleToc.checked;
+  state.currentArticle.productId = el.toggleEbook.checked ? Number(el.editorProductSelect.value) || null : null;
+  state.currentArticle.affiliateId = Number(el.editorAffiliateSelect.value) || null;
+  el.editorMetaDescription.value = state.currentArticle.metaDescription;
   updateLocalDeleteButton();
   return data.id;
 }
@@ -959,15 +1027,12 @@ if (el.btnUploadBlogger) {
 
     try {
       const articleId = await saveCurrentArticle();
-      const currentHtml = state.currentArticle.renderedHtml;
       showToast('Creating the confirmed Blogger draft...', 'info');
       const res = await fetch('/api/blogger/draft', {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify({
           blog_id: blogId,
-          title,
-          rendered_html: currentHtml,
           article_id: articleId,
           confirmed: true,
         }),
@@ -976,9 +1041,81 @@ if (el.btnUploadBlogger) {
       if (!res.ok) throw new Error(data.detail || 'Blogger upload failed');
       state.currentArticle.bloggerPostId = data.post_id;
       state.currentArticle.bloggerBlogId = blogId;
+      state.currentArticle.bloggerPostUrl = data.url || '';
+      if (!data.verified) {
+        showToast(data.message || 'Blogger created a draft, but verification is incomplete. Inspect it before retrying.', 'error');
+        updateLocalDeleteButton();
+        return;
+      }
       updateLocalDeleteButton();
-      showToast('Blogger draft created; it has not been published.', 'success');
+      showToast('Blogger draft created and verified; it has not been published.', 'success');
       loadBloggerPosts(blogId);
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  });
+}
+
+async function runLinkedBloggerAction(action) {
+  if (!state.currentArticle.bloggerPostId || !state.currentArticle.bloggerBlogId) {
+    showToast('Save and link this article to a Blogger post first.', 'error');
+    return;
+  }
+  const title = el.editorTitle.value.trim();
+  if (!window.confirm(action === 'publish'
+    ? `Publish "${title}" now? This makes the Blogger post publicly visible.`
+    : `Update the existing Blogger post "${title}" with the current saved article?`)) return;
+  try {
+    const articleId = await saveCurrentArticle();
+    const endpoint = action === 'publish' ? '/api/blogger/posts/publish' : '/api/blogger/posts/update';
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({
+        blog_id: state.currentArticle.bloggerBlogId,
+        post_id: state.currentArticle.bloggerPostId,
+        article_id: articleId,
+        confirmed: true,
+      }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || 'Blogger action failed.');
+    if (!data.success) {
+      showToast(data.message || 'Blogger action could not be verified. Inspect Blogger before retrying.', 'error');
+      return;
+    }
+    if (action === 'publish') state.currentArticle.status = 'PUBLISHED';
+    state.currentArticle.bloggerPostUrl = data.url || state.currentArticle.bloggerPostUrl;
+    updateLocalDeleteButton();
+    showToast(data.message, 'success');
+    loadBloggerPosts(state.currentArticle.bloggerBlogId);
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+
+el.btnUpdateBlogger?.addEventListener('click', () => runLinkedBloggerAction('update'));
+el.btnPublishBlogger?.addEventListener('click', () => runLinkedBloggerAction('publish'));
+
+if (el.btnVerifyBlogger) {
+  el.btnVerifyBlogger.addEventListener('click', async () => {
+    if (!state.currentArticle.id || !state.currentArticle.bloggerPostId || !state.currentArticle.bloggerBlogId) {
+      showToast('Select a saved article linked to a Blogger post first.', 'error');
+      return;
+    }
+    try {
+      const response = await fetch('/api/blogger/posts/verify', {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          blog_id: state.currentArticle.bloggerBlogId,
+          post_id: state.currentArticle.bloggerPostId,
+          article_id: state.currentArticle.id,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || 'Blogger verification failed.');
+      showToast(data.message, data.success ? 'success' : 'error');
     } catch (err) {
       showToast(err.message, 'error');
     }
@@ -1004,6 +1141,7 @@ if (el.btnDeleteLocal) {
       state.currentArticle.id = null;
       state.currentArticle.bloggerPostId = '';
       state.currentArticle.bloggerBlogId = '';
+      state.currentArticle.status = 'DRAFT';
       updateLocalDeleteButton();
       showToast('Local copy deleted. The Blogger draft was not changed.', 'success');
     } catch (err) {
@@ -1125,10 +1263,17 @@ async function insertArticleImage(featured = false) {
     el.imageAlt?.focus();
     return;
   }
-  const provider = image.provider === 'pexels' ? 'Pexels' : 'Unsplash';
+  const provider = image.provider === 'pexels'
+    ? 'Pexels'
+    : image.provider === 'unsplash'
+      ? 'Unsplash'
+      : 'Pollinations AI';
   const caption = (el.imageCaption?.value || '').trim();
   const captionPart = caption ? ` "${caption.replace(/(["\\])/g, '\\$1')}"` : '';
-  const snippet = `![${escapeMarkdownLabel(alt)}](<${image.image_url}>${captionPart})\n\nPhoto by [${escapeMarkdownLabel(image.photographer)}](<${image.photographer_url}>) on [${provider}](<${image.source_url}>).\n\n`;
+  const attribution = image.provider === 'pollinations'
+    ? `Generated with [Pollinations AI](<${image.source_url}>). Verify that the provider-hosted image URL remains available before publication.`
+    : `Photo by [${escapeMarkdownLabel(image.photographer)}](<${image.photographer_url}>) on [${provider}](<${image.source_url}>).`;
+  const snippet = `![${escapeMarkdownLabel(alt)}](<${image.image_url}>${captionPart})\n\n${attribution}\n\n`;
   const editor = el.markdownEditor;
   if (featured) {
     const titleMatch = editor.value.match(/^# [^\r\n]*\r?\n/);
@@ -1144,6 +1289,87 @@ async function insertArticleImage(featured = false) {
   await renderPreview();
   switchTab('tab-editor');
   showToast(`${provider} photo inserted with its alt text and source attribution. Save the draft to keep it.`, 'success');
+}
+
+if (el.btnGenerateFeaturedImage) {
+  el.btnGenerateFeaturedImage.addEventListener('click', async () => {
+    const topic = el.generatedImageTopic.value.trim();
+    if (topic.length < 2) {
+      showToast('Enter a specific article topic before generating an image.', 'error');
+      el.generatedImageTopic.focus();
+      return;
+    }
+    el.btnGenerateFeaturedImage.disabled = true;
+    el.imageGenerationSpinner.classList.remove('hidden');
+    el.imageGenerationStatus.textContent = 'Requesting a topic-specific illustration from Pollinations AI…';
+    el.generatedImagePreview.classList.add('hidden');
+    el.btnSelectGeneratedImage.disabled = true;
+    try {
+      const response = await fetch('/api/generate-image', {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ topic, width: 768, height: 512 }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || 'Image generation failed.');
+      const imageUrl = safeHttpsUrl(data.image_url);
+      if (!imageUrl || !imageUrl.startsWith('https://image.pollinations.ai/')) {
+        throw new Error('The image provider returned an unexpected URL; the image was not selected.');
+      }
+      el.generatedImage.alt = `Generated illustration for ${topic}`;
+      el.generatedImage.onload = () => {
+        el.generatedImagePreview.classList.remove('hidden');
+        el.btnSelectGeneratedImage.disabled = false;
+        el.imageGenerationStatus.textContent = data.warning || 'Image generated and loaded for preview. It is not stored by this application.';
+      };
+      el.generatedImage.onerror = () => {
+        el.generatedImagePreview.classList.add('hidden');
+        el.imageGenerationStatus.textContent = 'The generated image URL could not be loaded in the browser. Retry later or use a selected stock image.';
+      };
+      el.generatedImage.src = imageUrl;
+      el.generatedImagePreview.classList.remove('hidden');
+      el.generatedImagePreview.querySelector('img').referrerPolicy = 'no-referrer';
+    } catch (err) {
+      el.imageGenerationStatus.textContent = err.message;
+      showToast(err.message, 'error');
+    } finally {
+      el.imageGenerationSpinner.classList.add('hidden');
+      el.btnGenerateFeaturedImage.disabled = false;
+    }
+  });
+}
+
+if (el.btnSelectGeneratedImage) {
+  el.btnSelectGeneratedImage.addEventListener('click', () => {
+    const imageUrl = safeHttpsUrl(el.generatedImage?.src || '');
+    if (!imageUrl || !el.generatedImage?.complete || !el.generatedImage.naturalWidth) {
+      showToast('Wait for the generated image preview to load before selecting it.', 'error');
+      return;
+    }
+    const topic = el.generatedImageTopic.value.trim();
+    state.selectedStockImage = {
+      image_url: imageUrl,
+      thumbnail_url: imageUrl,
+      alt_text: `Illustration of ${topic}`,
+      photographer: 'Pollinations AI',
+      photographer_url: 'https://pollinations.ai/',
+      source_url: 'https://pollinations.ai/',
+      provider: 'pollinations',
+    };
+    if (el.imageAlt) el.imageAlt.value = state.selectedStockImage.alt_text;
+    if (el.imageCaption) el.imageCaption.value = '';
+    el.imgDisplayContainer.replaceChildren();
+    const selected = new Image();
+    selected.src = imageUrl;
+    selected.alt = state.selectedStockImage.alt_text;
+    selected.referrerPolicy = 'no-referrer';
+    selected.loading = 'lazy';
+    selected.style.cssText = 'width:100%; border-radius:10px;';
+    el.imgDisplayContainer.appendChild(selected);
+    el.imgDisplayContainer.classList.remove('hidden');
+    el.imgActions.classList.remove('hidden');
+    el.imageGenerationStatus.textContent = 'Selected for insertion. Add it to the article only after reviewing its relevance; provider hosting is not permanent storage.';
+  });
 }
 
 if (el.btnInsertImageEditor) {
@@ -1340,14 +1566,18 @@ function renderProductsTable() {
 }
 
 function populateProductSelects() {
-  if (!el.autopilotProductSelect) return;
-  el.autopilotProductSelect.innerHTML = '<option value="">-- Choose Product --</option>';
+  if (el.autopilotProductSelect) el.autopilotProductSelect.innerHTML = '<option value="">-- Choose Product --</option>';
+  if (el.editorProductSelect) el.editorProductSelect.innerHTML = '<option value="">Select a saved product</option>';
   state.products.forEach(p => {
     const opt = document.createElement('option');
-    opt.value = p.id;
+    opt.value = String(p.id);
     opt.textContent = `${p.title} (${p.price || ''})`;
-    el.autopilotProductSelect.appendChild(opt);
+    if (el.autopilotProductSelect) el.autopilotProductSelect.appendChild(opt.cloneNode(true));
+    if (el.editorProductSelect) el.editorProductSelect.appendChild(opt);
   });
+  if (el.editorProductSelect && state.currentArticle.productId) {
+    el.editorProductSelect.value = String(state.currentArticle.productId);
+  }
 }
 
 if (el.productForm) {
@@ -1428,14 +1658,18 @@ function renderAffiliatesTable() {
 }
 
 function populateAffiliateSelects() {
-  if (!el.autopilotAffiliateSelect) return;
-  el.autopilotAffiliateSelect.innerHTML = '<option value="">-- Choose Affiliate Link --</option>';
+  if (el.autopilotAffiliateSelect) el.autopilotAffiliateSelect.innerHTML = '<option value="">-- Choose Affiliate Link --</option>';
+  if (el.editorAffiliateSelect) el.editorAffiliateSelect.innerHTML = '<option value="">No affiliate</option>';
   state.affiliates.forEach(a => {
     const opt = document.createElement('option');
-    opt.value = a.id;
+    opt.value = String(a.id);
     opt.textContent = a.product_name;
-    el.autopilotAffiliateSelect.appendChild(opt);
+    if (el.autopilotAffiliateSelect) el.autopilotAffiliateSelect.appendChild(opt.cloneNode(true));
+    if (el.editorAffiliateSelect) el.editorAffiliateSelect.appendChild(opt);
   });
+  if (el.editorAffiliateSelect && state.currentArticle.affiliateId) {
+    el.editorAffiliateSelect.value = String(state.currentArticle.affiliateId);
+  }
 }
 
 if (el.affiliateForm) {
@@ -1495,6 +1729,7 @@ async function checkOAuthStatus() {
       el.googleIndicator.className = 'indicator green';
       el.googleStatusText.textContent = `Google: ${data.user?.email || 'Connected'}`;
       el.connectGoogleBtn.textContent = 'Connected ✓';
+      el.btnDisconnectGoogle?.classList.remove('hidden');
       if (el.oauthConnectionHelp) {
         el.oauthConnectionHelp.textContent = 'Google API connected. Blogger and Search Console access use the saved server-side OAuth credentials.';
       }
@@ -1504,13 +1739,17 @@ async function checkOAuthStatus() {
       const reconnectRequired = data.connection_state === 'reconnect_required';
       el.googleStatusText.textContent = reconnectRequired ? 'Google: Reconnect required' : 'Google: Not connected';
       el.connectGoogleBtn.textContent = reconnectRequired ? 'Reconnect Google' : 'Connect Google';
+      el.btnDisconnectGoogle?.classList.toggle('hidden', !reconnectRequired);
       if (el.oauthConnectionHelp) {
         el.oauthConnectionHelp.textContent = reconnectRequired
           ? 'A saved Google credential is incomplete or invalid. Reconnect Google. On Vercel, credentials must be stored in durable shared storage to remain available between server instances.'
+          : data.connection_state === 'temporarily_unavailable'
+          ? data.error || 'Google could not refresh the saved credential. Retry after the network service is available.'
           : data.configured
           ? 'OAuth client is configured, but Google has not been connected yet. Use the exact callback URL below in the Google OAuth client.'
           : 'Google OAuth is not configured. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET on the server, then add the exact callback URL below to the Google OAuth client.';
       }
+
     }
     return Boolean(data.connected);
   } catch (err) {
@@ -1521,6 +1760,29 @@ async function checkOAuthStatus() {
     if (el.oauthConnectionHelp) el.oauthConnectionHelp.textContent = err.message;
     return false;
   }
+}
+
+if (el.btnDisconnectGoogle) {
+  el.btnDisconnectGoogle.addEventListener('click', async () => {
+    if (!window.confirm('Disconnect the saved Google account from this application?')) return;
+    el.btnDisconnectGoogle.disabled = true;
+    try {
+      const response = await fetch('/api/oauth/disconnect', {
+        method: 'POST',
+        headers: getAuthHeaders(),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || 'Google account could not be disconnected.');
+      state.googleConnected = false;
+      el.btnDisconnectGoogle.classList.add('hidden');
+      showToast('Google account disconnected from this application.', 'success');
+      await checkOAuthStatus();
+    } catch (err) {
+      showToast(err.message, 'error');
+    } finally {
+      el.btnDisconnectGoogle.disabled = false;
+    }
+  });
 }
 
 async function triggerGoogleLogin() {

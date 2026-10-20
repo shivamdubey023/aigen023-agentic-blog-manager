@@ -17,6 +17,7 @@ This is a Vercel-hosted FastAPI application with a plain HTML/CSS/JavaScript fro
 │   ├── database.py
 │   ├── content_quality.py
 │   ├── env_config.py
+│   ├── image_generation.py
 │   ├── image_renderer.py
 │   ├── article_visuals.py
 │   ├── llm_engine.py
@@ -64,7 +65,7 @@ This is a Vercel-hosted FastAPI application with a plain HTML/CSS/JavaScript fro
 | Location | Responsibility |
 | --- | --- |
 | `vercel.json` | Vercel build targets and URL routing. `api/index.py` is the Python function; `static/**` is deployed as static assets. |
-| `api/index.py` | FastAPI application, Pydantic request models, HTTP endpoints, OAuth callback, and static page handlers. `db.init_db()` runs at import/startup. |
+| `api/index.py` | FastAPI application, Pydantic request models, HTTP endpoints, OAuth callback, and static page handlers. Saves and renders article Markdown server-side; Blogger create/update/publish actions are separate and explicit. `db.init_db()` runs at import/startup. |
 | `static/index.html` | Main content-operations UI and semantic form/navigation markup. |
 | `static/css/style.css` | Main responsive visual system and layout. |
 | `static/js/app.js` | Main browser UI behavior, same-origin API calls, editing, and integration interactions. No build step or frontend package manager is configured. |
@@ -74,8 +75,9 @@ This is a Vercel-hosted FastAPI application with a plain HTML/CSS/JavaScript fro
 | `core/rewriter.py` | AI-assisted rewriting and HTML-to-text conversion. |
 | `property_a_blog/seo_optimizer.py` | Shared Markdown-to-Blogger HTML rendering, headings/TOC, safe HTML sanitization, responsive tables, image figures, SVG diagram insertion, schema, affiliate/product blocks, and editorial warnings. |
 | `core/article_visuals.py` | Deterministic self-contained SVG diagrams from user-authored process steps; no external image-generation service. |
-| `core/database.py` | SQLite schema, migrations, article revisions, quality reports, human review decisions, queue records, products, affiliates, and server-side credentials. |
+| `core/database.py` | SQLite schema and additive migrations, article/revision settings, Blogger IDs/URLs, quality reports, human review decisions, queue records, products, affiliates, and server-side credentials. |
 | `core/env_config.py` | Environment and local `.env` configuration accessors. |
+| `core/image_generation.py` | Pollinations AI request, response/image validation, and provider-hosted URL warning. It does not mirror images into durable storage. |
 | `core/stock_images.py`, `core/image_renderer.py` | Pexels/Unsplash search validation and safe image markup. |
 | `property_a_blog/blogger_client.py` | Google OAuth with signed, expiring state/PKCE verification, Blogger API operations, and Search Console report adapter. |
 | `property_a_blog/navigation.py` | Ordering live posts and building idempotent previous/next navigation. |
@@ -90,7 +92,7 @@ This is a Vercel-hosted FastAPI application with a plain HTML/CSS/JavaScript fro
 3. The browser uses same-origin `/api/...` requests. FastAPI validates request models and calls the existing `core/` or `property_a_blog/` logic.
 4. Integrations use server environment variables. The browser must not receive AI provider credentials.
 
-Notable API groups include `/api/health`, `/api/providers`, `/api/trending`, `/api/generate`, `/api/autopilot`, `/api/rewrite`, `/api/render`, `/api/images/*`, `/api/articles`, `/api/articles/{id}/quality-check`, `/api/articles/{id}/quality-reports`, `/api/articles/{id}/revisions`, `/api/articles/{id}/review`, `/api/products`, `/api/affiliates`, `/api/oauth/*`, `/api/blogger/*`, and `/api/search-console`. All API routes are unauthenticated at the application layer. A public deployment exposes drafts and mutation/publishing operations; platform-level access protection is required before production use.
+Notable API groups include `/api/health`, `/api/providers`, `/api/trending`, `/api/generate`, `/api/autopilot`, `/api/rewrite`, `/api/render`, `/api/images/*`, `/api/articles`, `/api/articles/{id}/quality-check`, `/api/articles/{id}/quality-reports`, `/api/articles/{id}/revisions`, `/api/articles/{id}/review`, `/api/products`, `/api/affiliates`, `/api/oauth/*`, `/api/blogger/*` (including separately confirmed draft creation, update, and publish actions), and `/api/search-console`. All API routes are unauthenticated at the application layer. A public deployment exposes drafts and mutation/publishing operations; platform-level access protection is required before production use.
 
 The current main UI does not expose the legacy Streamlit queue-management workflow, and there are no queue API routes. AdSense reporting is not implemented. Do not present either as available functionality.
 
@@ -107,7 +109,7 @@ Local development uses `content_ops.db` in the repository directory unless `CONT
 
 The application does not authenticate visitors. Configure Vercel Deployment Protection or equivalent platform access control for the full application before production use; the repository does not configure or verify that protection. OAuth uses a short-lived signed state value and a separate PKCE verifier, each bound to an HttpOnly, SameSite=Lax browser cookie. The signed state is returned through Google's OAuth protocol and contains no credential secret; the PKCE verifier is never sent in the authorization URL. Neither is stored in SQLite. Google OAuth access/refresh tokens are read and refreshed from server-side SQLite and are not returned in OAuth callback HTML, JavaScript storage, or client-readable cookies. SQLite is not encrypted at rest by this application, and on Vercel its `/tmp` location is ephemeral; configure suitable durable protected storage before relying on credentials or editorial records in production.
 
-Articles remain backward-compatible Markdown in the existing article/revision records. Selected image metadata (alt text, caption, and provider/photographer attribution) and diagram step specifications are represented in Markdown, so older drafts need no database migration. The shared renderer converts tables to responsive HTML and diagrams to self-contained SVG before preview or Blogger draft creation. Navigation suggestions are read-only and use LIVE Blogger post URLs; applying navigation changes remains a separate explicitly confirmed sync.
+Articles remain backward-compatible Markdown in the existing article/revision records. Startup adds `include_toc`, `product_id`, `affiliate_id`, and `blogger_post_url` columns when absent; revision records gain TOC and monetization selection columns. The migration is additive and preserves article IDs, Blogger IDs, prior revisions, and Markdown. Selected image metadata (alt text, caption, and provider/photographer attribution) and diagram step specifications remain represented in Markdown. Pollinations image URLs are provider-hosted and not durably mirrored; the UI validates a preview and warns that availability in Blogger is not guaranteed. The shared renderer is authoritative for preview, saved HTML, and Blogger draft/update content. Blogger title, HTML, labels, status, and returned URL/ID are read back after create/update/publish where available; generated search descriptions are stored locally because the documented Blogger Posts API does not expose a search-description field. Navigation suggestions are read-only and use LIVE Blogger post URLs; applying navigation changes remains a separate explicitly confirmed sync.
 
 Quality reports include evidence and severity per finding, not an aggregate score. Similarity is a human-review signal, not a plagiarism determination. Citation reachability/relevance, factual accuracy, code execution, and AI authorship are explicitly not verified.
 

@@ -21,7 +21,9 @@ These rules describe the current FastAPI, vanilla-JavaScript, and Vercel project
 - Keep Google OAuth tokens server-side. Do not add Google token headers, browser storage, or client-readable token cookies.
 - Bind OAuth callback state to the initiating browser with a short-lived HttpOnly cookie and validate the signed state/PKCE verifier. Keep OAuth credentials in server-side storage; Vercel `/tmp` is not durable credential storage.
 - The frontend uses same-origin requests and does not enable CORS. Do not add broad cross-origin credential access.
-- Require explicit confirmation before creating Blogger drafts or changing live post HTML. Avoid blind publish retries and preserve existing content.
+- Require explicit confirmation before creating Blogger drafts, updating any linked Blogger draft/live post, publishing a Blogger draft, or changing live post HTML. Verify external results before reporting success; avoid blind retries after uncertain responses and preserve existing content.
+- Render saved Markdown server-side for both preview and Blogger operations; do not trust client-supplied rendered HTML as the source of truth.
+- Keep Google refresh credentials on transient network failures. Report revoked/incomplete credentials separately and provide an explicit user-requested disconnect action.
 - Add product or affiliate blocks only from a specific user-selected vault record; never fall back to an arbitrary first item.
 - Do not make unapproved, destructive database changes or introduce a paid storage service.
 
@@ -31,6 +33,7 @@ These rules describe the current FastAPI, vanilla-JavaScript, and Vercel project
 - Use `textContent` for plain text. Escape untrusted values before HTML insertion, validate URL schemes before making links, and include `rel="noopener noreferrer"` on links opened in a new tab.
 - Render genuine loading, empty, failure, and success states. Do not fabricate analytics, integration health, or successful actions.
 - Keep article preview and Blogger output on the same renderer. Use semantic Markdown tables, captioned/attributed images, and user-authored portable SVG diagrams; do not silently claim a visual was generated or published if rendering fails.
+- Pollinations image generation is best-effort and rate-limited. Validate response bytes, preview before insertion, identify provider-hosted image URLs as non-durable, and do not claim the image is available in Blogger without checking it.
 - Keep browser requests same-origin and use server APIs for privileged operations. Never trust browser-supplied identity or role data.
 - Avoid storing integration credentials in `localStorage`, page markup, or client-readable cookies. Do not log OAuth codes, cookies, or API keys.
 
@@ -85,3 +88,4 @@ These rules describe the current FastAPI, vanilla-JavaScript, and Vercel project
 - [ ] Platform-level access protection covers the UI and every API route before production exposure; OAuth tokens remain server-side.
 - [ ] Persistent storage requirements are met; do not rely on Vercel `/tmp` for production records.
 - [ ] Blogger publishing and live updates remain explicit, confirmed actions.
+- [ ] Draft creation, post updates, and publishing are verified against the Blogger API response/read-back; uncertain outcomes require inspection before retry.

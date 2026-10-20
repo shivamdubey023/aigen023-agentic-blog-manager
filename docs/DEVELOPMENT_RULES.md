@@ -19,8 +19,10 @@ These rules describe the current FastAPI, vanilla-JavaScript, and Vercel project
 - Keep credentials server-side. Never put AI keys or Google OAuth tokens in HTML, JavaScript, URLs, browser storage, or client-readable cookies.
 - The application has no built-in owner login or API authorization. Before production deployment, require platform-level access protection (such as Vercel Deployment Protection) for the UI and all API routes. Do not publish a publicly accessible deployment containing private drafts or live integration credentials.
 - Keep Google OAuth tokens server-side. Do not add Google token headers, browser storage, or client-readable token cookies.
+- Bind OAuth callback state to the initiating browser with a short-lived HttpOnly cookie and validate the signed state/PKCE verifier. Keep OAuth credentials in server-side storage; Vercel `/tmp` is not durable credential storage.
 - The frontend uses same-origin requests and does not enable CORS. Do not add broad cross-origin credential access.
 - Require explicit confirmation before creating Blogger drafts or changing live post HTML. Avoid blind publish retries and preserve existing content.
+- Add product or affiliate blocks only from a specific user-selected vault record; never fall back to an arbitrary first item.
 - Do not make unapproved, destructive database changes or introduce a paid storage service.
 
 ## Frontend, accessibility, and privacy
@@ -28,6 +30,7 @@ These rules describe the current FastAPI, vanilla-JavaScript, and Vercel project
 - Use semantic HTML, associated labels, keyboard-operable controls, visible focus indicators, and responsive layouts. Check phone-width layouts for clipped content and horizontal overflow.
 - Use `textContent` for plain text. Escape untrusted values before HTML insertion, validate URL schemes before making links, and include `rel="noopener noreferrer"` on links opened in a new tab.
 - Render genuine loading, empty, failure, and success states. Do not fabricate analytics, integration health, or successful actions.
+- Keep article preview and Blogger output on the same renderer. Use semantic Markdown tables, captioned/attributed images, and user-authored portable SVG diagrams; do not silently claim a visual was generated or published if rendering fails.
 - Keep browser requests same-origin and use server APIs for privileged operations. Never trust browser-supplied identity or role data.
 - Avoid storing integration credentials in `localStorage`, page markup, or client-readable cookies. Do not log OAuth codes, cookies, or API keys.
 

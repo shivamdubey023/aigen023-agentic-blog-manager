@@ -26,6 +26,7 @@ const state = {
   products: [],
   affiliates: [],
   qualityReviewFresh: false,
+  bloggerPosts: [],
 };
 
 const el = {
@@ -146,6 +147,23 @@ const el = {
   btnRefreshBlogs: document.getElementById('btn-refresh-blogs'),
   btnSyncNavigation: document.getElementById('btn-sync-navigation'),
   bloggerPostsContainer: document.getElementById('blogger-posts-container'),
+  oauthConnectionHelp: document.getElementById('oauth-connection-help'),
+  bloggerNavigationPreview: document.getElementById('blogger-navigation-preview'),
+  btnPreviewNavigation: document.getElementById('btn-preview-navigation'),
+  internalLinkSearch: document.getElementById('internal-link-search'),
+  internalLinkSelect: document.getElementById('editor-internal-link'),
+  internalLinkPreview: document.getElementById('internal-link-preview'),
+  btnInsertInternalLink: document.getElementById('btn-insert-internal-link'),
+  diagramCaption: document.getElementById('diagram-caption'),
+  diagramSteps: document.getElementById('diagram-steps'),
+  btnInsertDiagram: document.getElementById('btn-insert-diagram'),
+  imageAlt: document.getElementById('article-image-alt'),
+  imageCaption: document.getElementById('article-image-caption'),
+  btnInsertFeaturedImage: document.getElementById('btn-insert-featured-image'),
+  vaultProductCount: document.getElementById('vault-product-count'),
+  vaultAffiliateCount: document.getElementById('vault-affiliate-count'),
+  vaultProductsCount: document.getElementById('vault-products-count'),
+  vaultAffiliatesCount: document.getElementById('vault-affiliates-count'),
 };
 
 try {
@@ -358,6 +376,16 @@ if (el.btnRunAutopilot) {
     const productId = includeProduct && el.autopilotProductSelect.value ? parseInt(el.autopilotProductSelect.value, 10) : null;
     const includeAffiliate = monetizeType === 'affiliate';
     const affiliateId = includeAffiliate && el.autopilotAffiliateSelect.value ? parseInt(el.autopilotAffiliateSelect.value, 10) : null;
+    if (includeProduct && !productId) {
+      showToast('Choose the relevant product to include, or select a post without a product.', 'error');
+      el.autopilotProductSelect.focus();
+      return;
+    }
+    if (includeAffiliate && !affiliateId) {
+      showToast('Choose the relevant affiliate link to include, or select a post without one.', 'error');
+      el.autopilotAffiliateSelect.focus();
+      return;
+    }
     el.autopilotSpinner.classList.remove('hidden');
     el.btnRunAutopilot.disabled = true;
 
@@ -1034,6 +1062,8 @@ function renderStockImageResults(images) {
     select.textContent = 'Select this photo';
     select.addEventListener('click', () => {
       state.selectedStockImage = image;
+      if (el.imageAlt) el.imageAlt.value = image.alt_text || '';
+      if (el.imageCaption) el.imageCaption.value = '';
       el.imgDisplayContainer.replaceChildren();
       const selected = document.createElement('img');
       selected.src = image.image_url;
@@ -1079,30 +1109,134 @@ if (el.btnSearchStock) {
   });
 }
 
+function escapeMarkdownLabel(value) {
+  return String(value).replace(/([\\[\]])/g, '\\$1').replace(/\r?\n/g, ' ').trim();
+}
+
+async function insertArticleImage(featured = false) {
+  const image = state.selectedStockImage;
+  if (!image) {
+    showToast('Select a stock photo before inserting it.', 'error');
+    return;
+  }
+  const alt = (el.imageAlt?.value || image.alt_text || '').trim();
+  if (!alt) {
+    showToast('Add descriptive alternative text before inserting the image.', 'error');
+    el.imageAlt?.focus();
+    return;
+  }
+  const provider = image.provider === 'pexels' ? 'Pexels' : 'Unsplash';
+  const caption = (el.imageCaption?.value || '').trim();
+  const captionPart = caption ? ` "${caption.replace(/(["\\])/g, '\\$1')}"` : '';
+  const snippet = `![${escapeMarkdownLabel(alt)}](<${image.image_url}>${captionPart})\n\nPhoto by [${escapeMarkdownLabel(image.photographer)}](<${image.photographer_url}>) on [${provider}](<${image.source_url}>).\n\n`;
+  const editor = el.markdownEditor;
+  if (featured) {
+    const titleMatch = editor.value.match(/^# [^\r\n]*\r?\n/);
+    const offset = titleMatch ? titleMatch[0].length : 0;
+    const prefix = offset && editor.value.slice(offset, offset + 1) !== '\n' ? '\n' : '';
+    editor.setRangeText(`${prefix}\n${snippet}`, offset, offset, 'end');
+  } else {
+    editor.setRangeText(snippet, editor.selectionStart, editor.selectionEnd, 'end');
+  }
+  editor.focus();
+  state.currentArticle.markdown = editor.value;
+  resetQualityReview();
+  await renderPreview();
+  switchTab('tab-editor');
+  showToast(`${provider} photo inserted with its alt text and source attribution. Save the draft to keep it.`, 'success');
+}
+
 if (el.btnInsertImageEditor) {
-  el.btnInsertImageEditor.addEventListener('click', async () => {
-    const image = state.selectedStockImage;
-    if (!image) {
-      showToast('Select a stock photo before inserting it.', 'error');
+  el.btnInsertImageEditor.addEventListener('click', () => insertArticleImage(false));
+}
+if (el.btnInsertFeaturedImage) {
+  el.btnInsertFeaturedImage.addEventListener('click', () => insertArticleImage(true));
+}
+
+if (el.btnInsertDiagram) {
+  el.btnInsertDiagram.addEventListener('click', async () => {
+    const caption = (el.diagramCaption.value || '').trim() || 'Process flow';
+    const steps = (el.diagramSteps.value || '').trim();
+    if (!steps) {
+      showToast('Describe the real process steps before inserting a diagram.', 'error');
+      el.diagramSteps.focus();
       return;
     }
-    if (!el.editorTitle.value.trim()) {
-      showToast('Open or start an article in the editor before inserting a photo.', 'error');
-      switchTab('tab-editor');
-      return;
-    }
-    const safeMarkdown = (text) => String(text).replace(/([\\[\]])/g, '\\$1');
-    const provider = image.provider === 'pexels' ? 'Pexels' : 'Unsplash';
-    const snippet = `![${safeMarkdown(image.alt_text || 'Article illustration')}](<${image.image_url}>)\n\nPhoto by [${safeMarkdown(image.photographer)}](<${image.photographer_url}>) on [${provider}](<${image.source_url}>).\n\n`;
-    const editor = el.markdownEditor;
-    const start = editor.selectionStart;
-    const end = editor.selectionEnd;
-    editor.setRangeText(snippet, start, end, 'end');
-    editor.focus();
-    state.currentArticle.markdown = editor.value;
+    const safeTitle = caption.replace(/["\r\n]/g, ' ').trim();
+    const diagram = `\`\`\`diagram title="${safeTitle}"\n${steps}\n\`\`\`\n\n`;
+    el.markdownEditor.setRangeText(
+      diagram,
+      el.markdownEditor.selectionStart,
+      el.markdownEditor.selectionEnd,
+      'end',
+    );
+    el.markdownEditor.focus();
+    state.currentArticle.markdown = el.markdownEditor.value;
+    resetQualityReview();
     await renderPreview();
-    switchTab('tab-editor');
-    showToast(`${provider} photo inserted with source attribution. Save the edited draft to keep the change.`, 'success');
+    showToast('Editable diagram specification inserted; inspect the SVG preview before saving.', 'success');
+  });
+}
+
+function populateInternalLinkSuggestions(query = '') {
+  if (!el.internalLinkSelect) return;
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  const livePosts = state.bloggerPosts.filter((post) => (
+    post.status === 'LIVE'
+    && safeHttpsUrl(post.url)
+    && String(post.title || '').toLocaleLowerCase().includes(normalizedQuery)
+  ));
+  el.internalLinkSelect.replaceChildren();
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = livePosts.length
+    ? 'Choose a published article'
+    : (state.googleConnected ? 'No matching published posts with a public URL' : 'Connect Blogger and load live posts');
+  el.internalLinkSelect.appendChild(placeholder);
+  livePosts.forEach((post) => {
+    const option = document.createElement('option');
+    option.value = String(post.id);
+    const url = safeHttpsUrl(post.url);
+    option.textContent = `${post.title} — ${url}`;
+    option.dataset.title = post.title;
+    option.dataset.url = url;
+    el.internalLinkSelect.appendChild(option);
+  });
+  updateInternalLinkPreview();
+}
+
+function updateInternalLinkPreview() {
+  if (!el.internalLinkPreview || !el.internalLinkSelect) return;
+  const selected = el.internalLinkSelect.selectedOptions[0];
+  const title = selected?.dataset.title || '';
+  const url = safeHttpsUrl(selected?.dataset.url || '');
+  el.internalLinkPreview.textContent = title && url
+    ? `Link preview: ${title} → ${url}`
+    : 'Select a published post to preview its destination URL.';
+}
+
+if (el.internalLinkSearch) {
+  el.internalLinkSearch.addEventListener('input', () => populateInternalLinkSuggestions(el.internalLinkSearch.value));
+}
+if (el.internalLinkSelect) {
+  el.internalLinkSelect.addEventListener('change', updateInternalLinkPreview);
+}
+if (el.btnInsertInternalLink) {
+  el.btnInsertInternalLink.addEventListener('click', () => {
+    const option = el.internalLinkSelect.selectedOptions[0];
+    const url = safeHttpsUrl(option?.dataset.url || '');
+    const title = option?.dataset.title?.trim() || '';
+    if (!url || !title) {
+      showToast('Choose a real published Blogger post with a public HTTPS URL.', 'error');
+      return;
+    }
+    const link = `[${escapeMarkdownLabel(title)}](<${url}>)`;
+    el.markdownEditor.setRangeText(link, el.markdownEditor.selectionStart, el.markdownEditor.selectionEnd, 'end');
+    el.markdownEditor.focus();
+    state.currentArticle.markdown = el.markdownEditor.value;
+    resetQualityReview();
+    renderPreview();
+    showToast('Contextual link inserted to the selected live post. Save the draft to keep it.', 'success');
   });
 }
 
@@ -1149,31 +1283,36 @@ async function loadProducts() {
   try {
     const res = await fetch('/api/products');
     const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Products could not be loaded.');
     state.products = Array.isArray(data) ? data : [];
     renderProductsTable();
     populateProductSelects();
   } catch (err) {
     console.error('Failed to load products', err);
+    if (el.productsTableContainer) el.productsTableContainer.innerHTML = `<p class="vault-empty" role="alert">${escapeHtml(err.message)}</p>`;
   }
 }
 
 function renderProductsTable() {
   if (!el.productsTableContainer) return;
+  if (el.vaultProductCount) el.vaultProductCount.textContent = String(state.products.length);
+  if (el.vaultProductsCount) el.vaultProductsCount.textContent = String(state.products.length);
   if (state.products.length === 0) {
-    el.productsTableContainer.innerHTML = '<p class="text-muted" style="font-size:13px;">No products added yet.</p>';
+    el.productsTableContainer.innerHTML = '<p class="vault-empty">No products yet. Add a guide above to build your catalog.</p>';
+    if (el.ebookLivePreview) el.ebookLivePreview.innerHTML = '<p class="vault-empty">Your selected product preview will appear here.</p>';
     return;
   }
-  let html = '<div style="display:flex; flex-direction:column; gap:8px;">';
+  let html = '<div class="vault-product-list">';
   state.products.forEach(p => {
     html += `
-      <div style="display:flex; justify-content:space-between; align-items:center; background:#111827; padding:10px 14px; border-radius:8px; border:1px solid #1f2937;">
-        <div>
-          <strong style="color:#ffffff; font-size:14px;">${escapeHtml(p.title)}</strong>
-          <span style="color:#34d399; font-size:13px; margin-left:8px;">${escapeHtml(p.price || '')}</span>
-          <p style="margin:2px 0 0 0; color:#94a3b8; font-size:12px;">${escapeHtml(p.url)}</p>
+      <article class="vault-item">
+        <div class="vault-item-copy">
+          <strong class="vault-item-title">${escapeHtml(p.title)}</strong>
+          <span class="vault-item-meta">${escapeHtml(p.url)}</span>
+          ${p.price ? `<span class="vault-item-price">${escapeHtml(p.price)}</span>` : ''}
         </div>
-        <button class="btn btn-secondary btn-sm" onclick="deleteProductItem(${p.id})">Delete</button>
-      </div>
+        <button class="btn btn-secondary btn-sm" type="button" onclick="deleteProductItem(${Number(p.id)})" aria-label="Delete ${escapeHtml(p.title)}">Remove</button>
+      </article>
     `;
   });
   html += '</div>';
@@ -1187,12 +1326,12 @@ function renderProductsTable() {
       ? `<a href="${escapeHtml(productUrl)}" target="_blank" rel="noopener noreferrer" class="btn btn-primary btn-sm">Get on Instamojo &rarr;</a>`
       : '<span class="btn btn-primary btn-sm" aria-disabled="true">Checkout URL unavailable</span>';
     el.ebookLivePreview.innerHTML = `
-      <div style="padding:18px; border:2px solid #4f46e5; border-radius:12px; background:linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%); color:#ffffff;">
-        <span style="display:inline-block; padding:3px 10px; font-size:11px; font-weight:700; background:#fbbf24; color:#000; border-radius:12px; margin-bottom:8px;">${escapeHtml(prod.badge || '★ Recommended Guide')}</span>
-        <h4 style="margin:0 0 6px 0; font-size:17px; color:#fff;">${escapeHtml(prod.title)}</h4>
-        <p style="margin:0 0 10px 0; font-size:13px; color:#cbd5e1;">${escapeHtml(prod.description || 'Fast-track developer guide.')}</p>
-        <div style="display:flex; align-items:center; justify-content:space-between;">
-          <span style="font-size:18px; font-weight:800; color:#34d399;">${escapeHtml(prod.price || 'Special')}</span>
+      <div class="vault-preview-card">
+        <span class="badge yellow">${escapeHtml(prod.badge || 'Recommended guide')}</span>
+        <h4>${escapeHtml(prod.title)}</h4>
+        <p>${escapeHtml(prod.description || 'Digital guide')}</p>
+        <div class="vault-preview-card-footer">
+          <span class="vault-preview-price">${escapeHtml(prod.price || 'View details')}</span>
           ${checkoutAction}
         </div>
       </div>
@@ -1209,9 +1348,6 @@ function populateProductSelects() {
     opt.textContent = `${p.title} (${p.price || ''})`;
     el.autopilotProductSelect.appendChild(opt);
   });
-  if (state.products.length > 0) {
-    el.autopilotProductSelect.value = state.products[0].id;
-  }
 }
 
 if (el.productForm) {
@@ -1256,30 +1392,35 @@ async function loadAffiliates() {
   try {
     const res = await fetch('/api/affiliates');
     const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Affiliate recommendations could not be loaded.');
     state.affiliates = Array.isArray(data) ? data : [];
     renderAffiliatesTable();
     populateAffiliateSelects();
   } catch (err) {
     console.error('Failed to load affiliates', err);
+    if (el.affTableContainer) el.affTableContainer.innerHTML = `<p class="vault-empty" role="alert">${escapeHtml(err.message)}</p>`;
   }
 }
 
 function renderAffiliatesTable() {
   if (!el.affTableContainer) return;
+  if (el.vaultAffiliateCount) el.vaultAffiliateCount.textContent = String(state.affiliates.length);
+  if (el.vaultAffiliatesCount) el.vaultAffiliatesCount.textContent = String(state.affiliates.length);
   if (state.affiliates.length === 0) {
-    el.affTableContainer.innerHTML = '<p class="text-muted" style="font-size:13px;">No affiliate links stored yet.</p>';
+    el.affTableContainer.innerHTML = '<p class="vault-empty">No affiliate recommendations yet. Add a relevant link above.</p>';
     return;
   }
-  let html = '<div style="display:flex; flex-direction:column; gap:8px;">';
+  let html = '<div class="vault-affiliate-list">';
   state.affiliates.forEach(a => {
     html += `
-      <div style="display:flex; justify-content:space-between; align-items:center; background:#111827; padding:10px 14px; border-radius:8px; border:1px solid #1f2937;">
-        <div>
-          <strong style="color:#ffffff; font-size:14px;">${escapeHtml(a.product_name)}</strong>
-          <p style="margin:2px 0 0 0; color:#94a3b8; font-size:12px;">${escapeHtml(a.tracking_url)}</p>
+      <article class="vault-item">
+        <div class="vault-item-copy">
+          <strong class="vault-item-title">${escapeHtml(a.product_name)}</strong>
+          <span class="vault-item-meta">${escapeHtml(a.tracking_url)}</span>
+          <span class="vault-item-meta">Disclosure included · ${escapeHtml((a.trigger_keywords_list || []).join(', ') || 'No trigger keywords')}</span>
         </div>
-        <button class="btn btn-secondary btn-sm" onclick="deleteAffiliateItem(${a.id})">Delete</button>
-      </div>
+        <button class="btn btn-secondary btn-sm" type="button" onclick="deleteAffiliateItem(${Number(a.id)})" aria-label="Delete ${escapeHtml(a.product_name)}">Remove</button>
+      </article>
     `;
   });
   html += '</div>';
@@ -1343,6 +1484,7 @@ async function checkOAuthStatus() {
   try {
     const res = await fetch('/api/oauth/status', { headers: getAuthHeaders() });
     const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Google connection status could not be checked.');
     state.googleConnected = data.connected;
 
     if (data.configured_redirect_uri && el.oauthRedirectDisplay) {
@@ -1351,15 +1493,33 @@ async function checkOAuthStatus() {
 
     if (data.connected) {
       el.googleIndicator.className = 'indicator green';
-      el.googleStatusText.textContent = `Blogger: ${data.user.email || 'Online'}`;
+      el.googleStatusText.textContent = `Google: ${data.user?.email || 'Connected'}`;
       el.connectGoogleBtn.textContent = 'Connected ✓';
-      loadBloggerBlogs();
+      if (el.oauthConnectionHelp) {
+        el.oauthConnectionHelp.textContent = 'Google API connected. Blogger and Search Console access use the saved server-side OAuth credentials.';
+      }
+      await loadBloggerBlogs();
     } else {
       el.googleIndicator.className = 'indicator red';
-      el.googleStatusText.textContent = 'Blogger: Offline';
+      const reconnectRequired = data.connection_state === 'reconnect_required';
+      el.googleStatusText.textContent = reconnectRequired ? 'Google: Reconnect required' : 'Google: Not connected';
+      el.connectGoogleBtn.textContent = reconnectRequired ? 'Reconnect Google' : 'Connect Google';
+      if (el.oauthConnectionHelp) {
+        el.oauthConnectionHelp.textContent = reconnectRequired
+          ? 'A saved Google credential is incomplete or invalid. Reconnect Google. On Vercel, credentials must be stored in durable shared storage to remain available between server instances.'
+          : data.configured
+          ? 'OAuth client is configured, but Google has not been connected yet. Use the exact callback URL below in the Google OAuth client.'
+          : 'Google OAuth is not configured. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET on the server, then add the exact callback URL below to the Google OAuth client.';
+      }
     }
+    return Boolean(data.connected);
   } catch (err) {
     console.error('OAuth status check failed', err);
+    state.googleConnected = false;
+    if (el.googleIndicator) el.googleIndicator.className = 'indicator red';
+    if (el.googleStatusText) el.googleStatusText.textContent = 'Google: Status unavailable';
+    if (el.oauthConnectionHelp) el.oauthConnectionHelp.textContent = err.message;
+    return false;
   }
 }
 
@@ -1367,14 +1527,22 @@ async function triggerGoogleLogin() {
   try {
     const res = await fetch('/api/oauth/url');
     const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Could not start Google OAuth.');
     if (data.redirect_uri && el.oauthRedirectDisplay) {
       el.oauthRedirectDisplay.value = data.redirect_uri;
     }
     if (data.url) {
-      window.location.href = data.url;
+      const authorizationUrl = new URL(data.url);
+      if (authorizationUrl.origin !== 'https://accounts.google.com') {
+        throw new Error('Google returned an unexpected authorization URL.');
+      }
+      window.location.assign(authorizationUrl.href);
+      return;
     }
+    throw new Error('Google OAuth did not return an authorization URL.');
   } catch (err) {
-    showToast('Login failed: ' + err.message, 'error');
+    if (el.oauthConnectionHelp) el.oauthConnectionHelp.textContent = err.message;
+    showToast('Google connection could not start: ' + err.message, 'error');
   }
 }
 
@@ -1393,6 +1561,7 @@ async function loadBloggerBlogs() {
   try {
     const res = await fetch('/api/blogger/blogs', { headers: getAuthHeaders() });
     const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Could not load Blogger blogs.');
     if (data.blogs && data.blogs.length > 0) {
       el.activeBlogSelector.innerHTML = '';
       el.rewriteBloggerSelect.innerHTML = '<option value="">-- Choose Post to Rewrite --</option>';
@@ -1403,20 +1572,33 @@ async function loadBloggerBlogs() {
         el.activeBlogSelector.appendChild(opt);
       });
       state.activeBlogId = data.blogs[0].id;
-      loadBloggerPosts(state.activeBlogId);
+      if (el.activeBlogSelector) el.activeBlogSelector.value = state.activeBlogId;
+      await loadBloggerPosts(state.activeBlogId);
+      return true;
     } else {
-      showToast('No Blogger blogs found for this Google account.', 'error');
+      if (el.activeBlogSelector) {
+        el.activeBlogSelector.innerHTML = '<option value="">No Blogger blogs available to this account</option>';
+      }
+      if (el.oauthConnectionHelp) {
+        el.oauthConnectionHelp.textContent = 'Google is connected, but this account returned no Blogger blogs. Check that the Blogger API is enabled and this Google account has access to the blog.';
+      }
+      return false;
     }
   } catch (err) {
-    console.error('Failed to load Blogger blogs:', err);
+    if (el.oauthConnectionHelp) el.oauthConnectionHelp.textContent = err.message;
+    showToast(`Google is connected, but Blogger blogs could not load: ${err.message}`, 'error');
+    return false;
   }
 }
 
 async function loadBloggerPosts(blogId) {
-  if (!blogId) return;
+  if (!blogId) return false;
   try {
-    const res = await fetch(`/api/blogger/posts?blog_id=${blogId}&limit=30`, { headers: getAuthHeaders() });
+    const res = await fetch(`/api/blogger/posts?blog_id=${encodeURIComponent(blogId)}&limit=100`, { headers: getAuthHeaders() });
     const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Could not load Blogger posts.');
+    state.bloggerPosts = Array.isArray(data.posts) ? data.posts : [];
+    populateInternalLinkSuggestions(el.internalLinkSearch?.value || '');
     if (data.posts && data.posts.length > 0) {
       el.rewriteBloggerSelect.innerHTML = '<option value="">-- Choose Post to Rewrite --</option>';
       let tableHtml = '<table style="width:100%; border-collapse:collapse; font-size:13px;"><thead><tr style="border-bottom:1px solid var(--border-subtle); color:#94a3b8;"><th style="padding:6px; text-align:left;">Title</th><th style="padding:6px; text-align:right;">Action</th></tr></thead><tbody>';
@@ -1436,11 +1618,15 @@ async function loadBloggerPosts(blogId) {
       el.bloggerPostsContainer.querySelectorAll('[data-post-id]').forEach(button => {
         button.addEventListener('click', () => selectPostForRewrite(button.dataset.postId));
       });
+      return true;
     } else {
       el.bloggerPostsContainer.innerHTML = '<p class="text-muted">No posts found in this blog.</p>';
+      return true;
     }
   } catch (err) {
     el.bloggerPostsContainer.innerHTML = `<p style="color:var(--color-danger);">${escapeHtml(err.message)}</p>`;
+    showToast(`Blogger connected, but posts could not load: ${err.message}`, 'error');
+    return false;
   }
 }
 
@@ -1453,15 +1639,77 @@ if (el.btnFetchBloggerPosts) {
       return;
     }
     showToast('Fetching latest posts from your Blogger blog...', 'info');
-    await loadBloggerBlogs();
-    showToast('Blogger posts loaded into dropdown!', 'success');
+    const loaded = await loadBloggerBlogs();
+    if (loaded) showToast('Blogger posts loaded into dropdown!', 'success');
   });
 }
 
 if (el.btnRefreshBlogs) {
   el.btnRefreshBlogs.addEventListener('click', async () => {
     showToast('Refreshing blog list...', 'info');
-    await loadBloggerBlogs();
+    if (await loadBloggerBlogs()) showToast('Blogger blogs refreshed.', 'success');
+  });
+}
+
+if (el.activeBlogSelector) {
+  el.activeBlogSelector.addEventListener('change', async () => {
+    state.activeBlogId = el.activeBlogSelector.value;
+    if (state.activeBlogId) {
+      await loadBloggerPosts(state.activeBlogId);
+      if (el.bloggerNavigationPreview) el.bloggerNavigationPreview.classList.add('hidden');
+    }
+  });
+}
+
+if (el.btnPreviewNavigation) {
+  el.btnPreviewNavigation.addEventListener('click', async () => {
+    const blogId = el.activeBlogSelector?.value || '';
+    if (!blogId) {
+      showToast('Connect Google and select a Blogger blog first.', 'error');
+      return;
+    }
+    el.btnPreviewNavigation.disabled = true;
+    el.btnPreviewNavigation.textContent = 'Loading live sequence…';
+    try {
+      const response = await fetch(`/api/blogger/navigation/preview?blog_id=${encodeURIComponent(blogId)}`, {
+        headers: getAuthHeaders(),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || 'Could not preview the live post sequence.');
+      const posts = Array.isArray(data.posts) ? data.posts : [];
+      if (!posts.length) {
+        el.bloggerNavigationPreview.innerHTML = '<p class="navigation-preview-item">No published posts with valid publication dates were returned.</p>';
+      } else {
+        el.bloggerNavigationPreview.innerHTML = posts.map((post, index) => {
+          const navTarget = (label, target, edge) => {
+            if (!target?.title) return `${label}: ${edge}`;
+            const url = safeHttpsUrl(target.url);
+            return url
+              ? `${label}: <a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(target.title)}</a>`
+              : `${label}: ${escapeHtml(target.title)} (public URL unavailable; no link)`;
+          };
+          const previous = navTarget('Previous', post.previous, 'none (first post)');
+          const next = navTarget('Next', post.next, 'none (latest post)');
+          const missingUrl = !safeHttpsUrl(post.url) ? '<br>This post has no public URL and will not be linked.' : '';
+          return `<div class="navigation-preview-item"><strong>${index + 1}. ${escapeHtml(post.title)}</strong><br>${previous}<br>${next}${missingUrl}</div>`;
+        }).join('');
+      }
+      const skipped = data.skipped_missing_published_date || [];
+      if (skipped.length) {
+        el.bloggerNavigationPreview.insertAdjacentHTML(
+          'beforeend',
+          `<p class="navigation-preview-item">${skipped.length} LIVE post(s) were skipped because their published date was missing or invalid.</p>`,
+        );
+      }
+      el.bloggerNavigationPreview.classList.remove('hidden');
+    } catch (err) {
+      el.bloggerNavigationPreview.innerHTML = `<p class="navigation-preview-item">${escapeHtml(err.message)}</p>`;
+      el.bloggerNavigationPreview.classList.remove('hidden');
+      showToast(err.message, 'error');
+    } finally {
+      el.btnPreviewNavigation.disabled = false;
+      el.btnPreviewNavigation.textContent = 'Preview live sequence';
+    }
   });
 }
 
@@ -1487,15 +1735,28 @@ if (el.rewriteBloggerSelect) {
 
 async function startApplication() {
   loadProviderStatus();
-  checkOAuthStatus();
+  const connected = await checkOAuthStatus();
   loadProducts();
   loadAffiliates();
 
   const urlParams = new URLSearchParams(window.location.search);
-  if (urlParams.get('oauth_success')) {
-    showToast('Google Blogger connected successfully!', 'success');
+  const oauthError = urlParams.get('oauth_error');
+  if (oauthError) {
+    const messages = {
+      consent_not_completed: 'Google authorization was cancelled or denied. Try connecting again and approve Blogger access.',
+      configuration_missing: 'Google OAuth credentials are missing on the server. Configure the client ID and secret.',
+      connection_failed: 'Google authorization returned, but the server could not save or validate the connection. Check the callback URL, server logs, and persistent storage, then reconnect.',
+    };
+    showToast(messages[oauthError] || 'Google authorization failed. Restart the connection from the Blogger tab.', 'error');
+    if (el.oauthConnectionHelp) el.oauthConnectionHelp.textContent = messages[oauthError] || 'Google authorization failed. Restart the connection from the Blogger tab.';
     window.history.replaceState({}, document.title, window.location.pathname);
-    setTimeout(checkOAuthStatus, 500);
+  } else if (urlParams.get('oauth_success')) {
+    if (connected) {
+      showToast('Google connected; Blogger API access is ready.', 'success');
+    } else {
+      showToast('Google returned from authorization, but a valid saved token is not available. Reconnect and check server-side storage.', 'error');
+    }
+    window.history.replaceState({}, document.title, window.location.pathname);
   }
 }
 

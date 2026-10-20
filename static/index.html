@@ -389,6 +389,32 @@
               </div>
             </div>
           </div>
+          <section class="editor-tools" aria-label="Article visual and linking tools">
+            <div class="editor-tool-card">
+              <div>
+                <h3>Insert a process diagram</h3>
+                <p class="helper-text">Create an editable, self-contained SVG from a real sequence. Use one flow per line, with steps separated by arrows.</p>
+              </div>
+              <label class="sr-only" for="diagram-caption">Diagram caption</label>
+              <input id="diagram-caption" class="form-control" type="text" maxlength="160" placeholder="Diagram caption (for example, Request flow)">
+              <label class="sr-only" for="diagram-steps">Diagram steps</label>
+              <textarea id="diagram-steps" class="form-control" rows="2" maxlength="500" placeholder="Browser -> FastAPI -> Database"></textarea>
+              <button class="btn btn-secondary" id="btn-insert-diagram" type="button">Insert diagram at cursor</button>
+            </div>
+            <div class="editor-tool-card">
+              <div>
+                <h3>Link to a published post</h3>
+                <p class="helper-text">Suggestions are loaded from real LIVE Blogger posts and use the post's actual public URL.</p>
+              </div>
+              <label for="editor-internal-link">Published article</label>
+              <input id="internal-link-search" class="form-control" type="search" maxlength="120" placeholder="Filter live Blogger titles">
+              <select id="editor-internal-link" class="form-control">
+                <option value="">Connect Blogger and load live posts</option>
+              </select>
+              <p id="internal-link-preview" class="helper-text" aria-live="polite">Select a published post to preview its destination URL.</p>
+              <button class="btn btn-secondary" id="btn-insert-internal-link" type="button">Insert contextual link</button>
+            </div>
+          </section>
         </div>
       </section>
 
@@ -423,7 +449,20 @@
             <div id="stock-image-results" class="image-display-empty">Choose a source and search phrase to find stock photos.</div>
             <div id="image-display-container" class="hidden"></div>
             <div class="image-actions hidden mt-10" id="image-actions">
-              <button class="btn btn-accent full-width" id="btn-insert-image-editor">Insert selected image into article</button>
+              <div class="form-row">
+                <div class="form-group flex-1">
+                  <label for="article-image-alt">Alternative text</label>
+                  <input id="article-image-alt" class="form-control" maxlength="300" placeholder="Describe what the image explains">
+                </div>
+                <div class="form-group flex-1">
+                  <label for="article-image-caption">Caption (optional)</label>
+                  <input id="article-image-caption" class="form-control" maxlength="300" placeholder="Short, useful image caption">
+                </div>
+              </div>
+              <div class="image-action-buttons">
+                <button class="btn btn-accent" id="btn-insert-image-editor" type="button">Insert at cursor</button>
+                <button class="btn btn-secondary" id="btn-insert-featured-image" type="button">Add as featured image</button>
+              </div>
             </div>
           </div>
         </div>
@@ -431,17 +470,35 @@
 
       <!-- TAB 6: MY PRODUCTS & AFFILIATES VAULT -->
       <section class="tab-pane" id="tab-monetize">
+        <header class="vault-hero">
+          <div class="vault-hero-copy">
+            <span class="eyebrow">CONTENT COMMERCE</span>
+            <h2>Products &amp; affiliate vault</h2>
+            <p>Organize the resources you recommend. Add them to an article only when they genuinely help its readers.</p>
+          </div>
+          <div class="vault-stats" aria-label="Saved vault items">
+            <div class="vault-stat"><span id="vault-product-count">—</span><small>Products</small></div>
+            <div class="vault-stat"><span id="vault-affiliate-count">—</span><small>Affiliate links</small></div>
+          </div>
+        </header>
         <div class="grid-2col">
           <!-- Column 1: My Products (eBooks / Guides / Instamojo) -->
-          <div class="card glass-card">
-            <div class="card-header">
-              <h2>My Products & Books</h2>
-              <span class="badge green">Instamojo / Direct</span>
+          <div class="card glass-card vault-card">
+            <div class="vault-section-heading">
+              <span class="vault-icon" aria-hidden="true">↗</span>
+              <div class="vault-section-copy">
+                <div class="card-header">
+                  <h2>My products</h2>
+                  <span class="badge green">CHECKOUT</span>
+                </div>
+                <p class="section-desc">Digital books, guides, and your own resources.</p>
+              </div>
             </div>
-            <p class="section-desc">Add your eBooks or guides here. You can attach any of them to your technical posts when appropriate.</p>
-            <a class="btn btn-secondary mb-20" href="/ebook/" target="_blank" rel="noopener noreferrer">Open installable eBook app ↗</a>
+            <a class="vault-store-link" href="/ebook/" target="_blank" rel="noopener noreferrer">
+              <span><strong>Open your eBook storefront</strong><small>Preview the installable catalog</small></span><span aria-hidden="true">↗</span>
+            </a>
             
-            <form id="product-form" class="mb-20">
+            <form id="product-form" class="vault-form">
               <div class="form-group">
                 <label for="prod-title">Product Title</label>
                 <input type="text" id="prod-title" class="form-control" placeholder="e.g. Code to Career — Python Fresher to Job-Ready" required>
@@ -464,24 +521,30 @@
             </form>
 
             <div class="products-list-wrapper">
-              <h4 style="margin: 16px 0 8px 0; font-size: 14px; color: #94a3b8;">Saved Products:</h4>
-              <div id="products-table-container"></div>
+              <div class="vault-list-heading"><h3>Saved products</h3><span id="vault-products-count" class="vault-list-count">0</span></div>
+              <div id="products-table-container" aria-live="polite"><p class="vault-empty">Loading your products…</p></div>
             </div>
 
-            <div class="mt-20">
-              <h4 style="margin: 0 0 8px 0; font-size: 14px; color: #94a3b8;">Live Card Preview:</h4>
-              <div id="ebook-live-preview"></div>
+            <div class="vault-preview-section">
+              <div class="vault-list-heading"><h3>Store card preview</h3><span class="vault-preview-label">PREVIEW</span></div>
+              <div id="ebook-live-preview"><p class="vault-empty">Add a product to preview its storefront card.</p></div>
             </div>
           </div>
 
           <!-- Column 2: Affiliate Link Vault -->
-          <div class="card glass-card">
-            <div class="card-header">
-              <h2>Affiliate Link Vault</h2>
-              <span class="badge blue">rel="sponsored"</span>
+          <div class="card glass-card vault-card affiliate-vault-card">
+            <div class="vault-section-heading">
+              <span class="vault-icon affiliate-icon" aria-hidden="true">⌁</span>
+              <div class="vault-section-copy">
+                <div class="card-header">
+                  <h2>Affiliate library</h2>
+                  <span class="badge blue">DISCLOSED</span>
+                </div>
+                <p class="section-desc">Track relevant partner links and show a clear disclosure in every article.</p>
+              </div>
             </div>
-            <p class="section-desc">Manage affiliate recommendations with automatic FTC/AdSense compliant disclosures.</p>
-            <form id="affiliate-form">
+            <div class="vault-disclosure-note"><span aria-hidden="true">ⓘ</span><p>Affiliate recommendations are inserted with a disclosure. Add links only where they are useful and relevant.</p></div>
+            <form id="affiliate-form" class="vault-form">
               <div class="form-group">
                 <label for="aff-name">Product Name</label>
                 <input type="text" id="aff-name" class="form-control" placeholder="e.g. DigitalOcean Cloud VPS" required>
@@ -496,7 +559,8 @@
               </div>
               <button type="submit" class="btn btn-secondary full-width">Save Affiliate Entry</button>
             </form>
-            <div id="affiliates-table-container" class="mt-20"></div>
+            <div class="vault-list-heading"><h3>Saved recommendations</h3><span id="vault-affiliates-count" class="vault-list-count">0</span></div>
+            <div id="affiliates-table-container" aria-live="polite"><p class="vault-empty">Loading affiliate links…</p></div>
           </div>
         </div>
       </section>
@@ -523,6 +587,9 @@
               Path: <strong>Google Cloud Console → Credentials → OAuth 2.0 Web Client → Authorized redirect URIs</strong>.
             </p>
           </div>
+          <p id="oauth-connection-help" class="oauth-connection-help" aria-live="polite">
+            Google connects Blogger and Search Console. Configure the OAuth client and exact callback URL on the server.
+          </p>
 
           <div class="form-group mt-20">
             <label for="active-blog-selector">Active Blogger Blog</label>
@@ -539,7 +606,11 @@
           <div class="info-callout mt-20">
             <h4>Previous / next post links</h4>
             <p class="section-desc">After a post is published, run this manually to synchronize links across live posts. It edits live Blogger content only after confirmation; Vercel does not watch Blogger publication events.</p>
+            <div class="action-buttons-group">
+              <button class="btn btn-secondary" id="btn-preview-navigation" type="button">Preview live sequence</button>
             <button class="btn btn-secondary" id="btn-sync-navigation">Sync live post navigation</button>
+            </div>
+            <div id="blogger-navigation-preview" class="navigation-preview hidden" aria-live="polite"></div>
           </div>
 
           <div class="blogger-posts-table-wrapper mt-20">

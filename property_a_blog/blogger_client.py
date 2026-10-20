@@ -1,7 +1,13 @@
 """Blogger and Search Console API wrappers with defensive errors."""
 from __future__ import annotations
+import base64
+import hashlib
+import hmac
 import json
 import os
+import re
+import secrets
+import time
 from datetime import date
 from typing import Any
 from core import database as db
@@ -22,6 +28,43 @@ REDIRECT_URI = "https://your-app.vercel.app/api/oauth/callback"
 
 def get_redirect_uri() -> str:
     return os.environ.get("GOOGLE_OAUTH_REDIRECT_URI", "").strip() or get_google_redirect_uri() or REDIRECT_URI
+
+def _oauth_state_signature(payload: str, client_secret: str) -> str:
+    message = f"nextgen-oauth-state:{payload}".encode("ascii")
+    return hmac.new(client_secret.encode("utf-8"), message, hashlib.sha256).hexdigest()
+
+def _create_oauth_state(client_secret: str) -> str:
+    payload = json.dumps(
+        {
+            "nonce": secrets.token_urlsafe(24),
+            "issued_at": int(time.time()),
+        },
+        separators=(",", ":"),
+    ).encode("utf-8")
+    encoded_payload = base64.urlsafe_b64encode(payload).rstrip(b"=").decode("ascii")
+    signature = _oauth_state_signature(encoded_payload, client_secret)
+    return f"{encoded_payload}.{signature}"
+
+def _read_oauth_state(state: str, client_secret: str) -> None:
+    try:
+        encoded_payload, supplied_signature = state.split(".", 1)
+    except (AttributeError, ValueError) as exc:
+        raise ValueError("Google OAuth state is invalid. Restart the connection.") from exc
+    expected_signature = _oauth_state_signature(encoded_payload, client_secret)
+    if not hmac.compare_digest(supplied_signature, expected_signature):
+        raise ValueError("Google OAuth state could not be verified. Restart the connection.")
+    try:
+        padded_payload = encoded_payload + "=" * (-len(encoded_payload) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(padded_payload).decode("utf-8"))
+        nonce = payload["nonce"]
+        issued_at = int(payload["issued_at"])
+        age = int(time.time()) - issued_at
+    except (ValueError, TypeError, KeyError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("Google OAuth state is invalid. Restart the connection.") from exc
+    if age < -60 or age > 900:
+        raise ValueError("Google OAuth state expired. Restart the connection.")
+    if not isinstance(nonce, str) or not nonce:
+        raise ValueError("Google OAuth state is invalid. Restart the connection.")
 
 def get_credentials(session_state: Any = None, token_override: Any = None) -> Credentials | None:
     token = None
@@ -68,9 +111,17 @@ def start_oauth(client_id: str, client_secret: str, session_state: Any, redirect
     flow = Flow.from_client_config({"web":{"client_id":client_id,"client_secret":client_secret,
       "auth_uri":"https://accounts.google.com/o/oauth2/auth","token_uri":"https://oauth2.googleapis.com/token",
       "redirect_uris":[target_redirect]}},scopes=SCOPES,redirect_uri=target_redirect)
-    url,state=flow.authorization_url(access_type="offline",include_granted_scopes="true",prompt="consent",
-                                     code_challenge_method="S256")
-    db.store_oauth_state(state, flow.code_verifier or "")
+    flow.code_verifier = secrets.token_urlsafe(64)
+    state = _create_oauth_state(client_secret)
+    url, _ = flow.authorization_url(
+        state=state,
+        access_type="offline",
+        include_granted_scopes="true",
+        prompt="consent",
+        code_challenge_method="S256",
+    )
+    session_state["oauth_state"] = state
+    session_state["oauth_verifier"] = flow.code_verifier
     session_state["used_redirect_uri"] = target_redirect
     return url
 
@@ -95,9 +146,15 @@ def finish_oauth(
             pass
     if not client_id or not client_secret:
         raise ValueError("Configure client_id and client_secret in .env or settings.")
-    code_verifier = db.consume_oauth_state(state)
-    if not code or not state or not code_verifier:
-        raise ValueError("OAuth state or PKCE verifier is missing, expired, or already used. Restart Google login.")
+    expected_state = session_state.pop("oauth_state", "")
+    code_verifier = session_state.pop("oauth_verifier", "")
+    if not expected_state or not hmac.compare_digest(str(expected_state), state or ""):
+        raise ValueError("Google OAuth state does not match this connection attempt. Restart the connection.")
+    if not code:
+        raise ValueError("Google did not return an authorization code. Restart the connection.")
+    _read_oauth_state(state, client_secret)
+    if not isinstance(code_verifier, str) or not re.fullmatch(r"[A-Za-z0-9._~-]{43,128}", code_verifier):
+        raise ValueError("Google OAuth PKCE verifier is missing. Restart the connection.")
     target_redirect = redirect_uri or session_state.get("used_redirect_uri") or get_redirect_uri()
     flow = Flow.from_client_config(
         {"web":{"client_id":client_id,"client_secret":client_secret,

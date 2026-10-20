@@ -88,15 +88,25 @@ def generate_technical_article(
         raise ValueError(f"No API key is configured for {provider}. Configure it or select another provider.")
     system_prompt = custom_system_prompt.strip() or HUMANIZED_SYSTEM_PROMPT
 
-    user_prompt = f"""Write a practical technical article for NextGen Tech Notes.
+    user_prompt = f"""Write a complete, practical technical article for NextGen Tech Notes.
 Topic: {topic}
 Primary keyword: {primary_keyword or topic}
 Target reader level: {audience}
 Author notes & specific guidance: {notes or 'Provide relevant examples and troubleshooting guidance.'}
 
-Use Markdown headings and examples where useful. Never imply that illustrative output or code
-was actually executed. Do not invent source URLs, citations, test results, or personal experience.
-Mark uncertain technical details [VERIFY]. Output Markdown only.
+Start with one specific, descriptive '# ' title and a useful introduction that names the reader,
+explains the problem, and previews what the article will teach. Organize the body with meaningful
+H2 sections and nested H3 subsections; keep paragraphs focused and use lists for actual sequences
+or grouped items. Explain prerequisites before examples. Include complete code and commands only
+when relevant, label fenced code blocks with their language, and provide practical troubleshooting
+or limitations where useful. Use Markdown tables only for concise comparisons or specifications
+supported by the notes; never fabricate prices, features, measurements, or benchmarks. Conclude
+with a practical summary or next step. Include references only when their URLs and claims are known;
+otherwise mark uncertain technical details [VERIFY] and do not invent citations.
+Add a ```diagram fence only when a simple process is accurately represented by explicit arrow-
+separated steps; do not invent architecture or claim generated code was executed. Avoid generic
+filler, repeated headings, exaggerated promises, and forced affiliate recommendations.
+Output Markdown only.
 """
 
     provider_calls = {

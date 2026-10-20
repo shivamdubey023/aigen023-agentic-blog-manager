@@ -247,6 +247,14 @@ class ContentQualityApiTests(unittest.TestCase):
         self.assertNotIn(token, status.text)
         credentials_loader.assert_called_once_with({})
 
+        state = "signed-state-for-test"
+        verifier = "test-pkce-verifier-that-is-long-enough-for-validation"
+
+        def start_oauth(_client_id, _client_secret, session, **_kwargs):
+            session["oauth_state"] = state
+            session["oauth_verifier"] = verifier
+            return "https://accounts.google.com/o/oauth2/auth"
+
         def finish_oauth(_code, _state, session, **_kwargs):
             session["google_api_token"] = {"token": token}
             session["google_user"] = {"email": "owner@example.test"}
@@ -255,15 +263,109 @@ class ContentQualityApiTests(unittest.TestCase):
         with (
             patch.object(api_module, "get_google_client_id", return_value="client-id"),
             patch.object(api_module, "get_google_client_secret", return_value="server-secret"),
+            patch.object(api_module, "start_oauth", side_effect=start_oauth),
             patch.object(api_module, "finish_oauth", side_effect=finish_oauth),
         ):
+            start = client.get("/api/oauth/url")
+            self.assertEqual(start.status_code, 200)
+            cookie_headers = start.headers.get_list("set-cookie")
+            self.assertTrue(any("aigen_google_oauth_state" in header for header in cookie_headers))
+            pkce_cookie = next(header for header in cookie_headers if "aigen_google_oauth_pkce" in header)
+            self.assertIn("httponly", pkce_cookie.lower())
+            self.assertIn("samesite=lax", pkce_cookie.lower())
+            self.assertNotIn(verifier, start.text)
             callback = client.get(
-                "/api/oauth/callback?code=private-code&state=valid-state",
+                f"/api/oauth/callback?code=private-code&state={state}",
                 follow_redirects=False,
             )
         self.assertEqual(callback.status_code, 303)
         self.assertNotIn(token, callback.text)
-        self.assertNotIn("set-cookie", callback.headers)
+        self.assertIn("aigen_google_oauth_state", callback.headers.get("set-cookie", ""))
+        self.assertIn("max-age=0", callback.headers.get("set-cookie", "").lower())
+
+    def test_oauth_callback_rejects_missing_or_mismatched_browser_state(self):
+        client = TestClient(app)
+        with patch.object(api_module, "finish_oauth") as finish:
+            callback = client.get(
+                "/api/oauth/callback?code=private-code&state=state-from-url",
+                follow_redirects=False,
+            )
+        self.assertEqual(callback.status_code, 303)
+        self.assertIn("oauth_error=connection_failed", callback.headers["location"])
+        finish.assert_not_called()
+
+    def test_oauth_status_identifies_incomplete_saved_credentials(self):
+        client = TestClient(app)
+        with (
+            patch.object(api_module, "resolve_current_credentials", return_value=(None, {})),
+            patch.object(api_module, "get_google_client_id", return_value="client-id"),
+            patch.object(api_module, "get_google_client_secret", return_value="client-secret"),
+            patch.object(api_module.db, "get_system_credential", return_value='{"token":"partial"}'),
+        ):
+            response = client.get("/api/oauth/status")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["connection_state"], "reconnect_required")
+        self.assertFalse(response.json()["connected"])
+        self.assertNotIn("partial", response.text)
+
+    def test_navigation_preview_uses_only_live_posts_and_real_neighbor_urls(self):
+        posts = [
+            {
+                "id": "later",
+                "title": "Later article",
+                "url": "https://blog.example/later",
+                "status": "LIVE",
+                "published": "2025-02-02T00:00:00Z",
+            },
+            {
+                "id": "draft",
+                "title": "Unpublished draft",
+                "url": "",
+                "status": "DRAFT",
+                "published": "2025-02-03T00:00:00Z",
+            },
+            {
+                "id": "earlier",
+                "title": "Earlier article",
+                "url": "https://blog.example/earlier",
+                "status": "LIVE",
+                "published": "2025-02-01T00:00:00Z",
+            },
+        ]
+        client = TestClient(app)
+        with (
+            patch.object(api_module, "resolve_current_credentials", return_value=(object(), {})),
+            patch.object(api_module, "list_posts", return_value=posts),
+        ):
+            response = client.get("/api/blogger/navigation/preview?blog_id=blog-id")
+        self.assertEqual(response.status_code, 200)
+        sequence = response.json()["posts"]
+        self.assertEqual([post["id"] for post in sequence], ["earlier", "later"])
+        self.assertIsNone(sequence[0]["previous"])
+        self.assertEqual(sequence[0]["next"]["url"], "https://blog.example/later")
+        self.assertEqual(sequence[1]["previous"]["url"], "https://blog.example/earlier")
+        self.assertIsNone(sequence[1]["next"])
+
+    def test_generation_never_attaches_an_unselected_vault_item(self):
+        client = TestClient(app)
+        payload = {
+            "topic": "Python deployment basics",
+            "provider": "groq",
+            "model": api_module.SUPPORTED_PROVIDERS["groq"]["default_model"],
+            "include_affiliate": True,
+        }
+        with patch.object(api_module, "generate_technical_article") as generate:
+            affiliate_response = client.post("/api/autopilot", json=payload)
+            self.assertEqual(affiliate_response.status_code, 400)
+            self.assertIn("Select a relevant affiliate", affiliate_response.json()["detail"])
+            generate.assert_not_called()
+
+        payload.update(include_affiliate=False, include_product=True)
+        with patch.object(api_module, "generate_technical_article") as generate:
+            product_response = client.post("/api/autopilot", json=payload)
+            self.assertEqual(product_response.status_code, 400)
+            self.assertIn("Select a relevant product", product_response.json()["detail"])
+            generate.assert_not_called()
 
 class ContentQualityMigrationTests(unittest.TestCase):
     def test_existing_article_database_migrates_without_losing_drafts(self):

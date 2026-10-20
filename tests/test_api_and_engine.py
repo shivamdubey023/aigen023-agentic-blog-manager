@@ -36,6 +36,21 @@ class EngineTests(unittest.TestCase):
             generate_technical_article(provider="groq", topic="Python database migrations")
         groq_call.assert_not_called()
 
+    @patch("core.llm_engine.resolve_key_for_provider", return_value="selected-key")
+    @patch("core.llm_engine._call_groq", return_value="# Descriptive title\n\nArticle body.")
+    def test_article_generation_prompt_requests_structured_verifiable_markdown(self, groq_call, _resolve_key):
+        result = generate_technical_article(
+            provider="groq",
+            model=SUPPORTED_PROVIDERS["groq"]["default_model"],
+            topic="Python database migrations",
+        )
+        self.assertIn("# Descriptive title", result)
+        user_prompt = groq_call.call_args.args[3]
+        self.assertIn("meaningful", user_prompt)
+        self.assertIn("Markdown tables", user_prompt)
+        self.assertIn("do not invent citations", user_prompt)
+        self.assertIn("```diagram", user_prompt)
+
     def test_image_renderer_requires_https_and_escapes_alt_text(self):
         html = featured_image_html(
             "https://images.pexels.com/photos/example.jpg",

@@ -7,9 +7,11 @@ A single-publication content workflow for [NextGen Tech Notes](https://aigen023.
 - User-selected article generation and optional curated topic ideas. Suggestions are not live trend or keyword metrics.
 - Explicitly selected AI provider and model; no automatic provider fallback.
 - Local article drafts, Markdown editing, HTML preview, SEO/schema warnings, and optional product/affiliate inserts.
+- Monetization cards are added only when a specific saved product or affiliate link is selected; generation does not fall back to an unrelated first vault entry.
 - Advisory content quality reports for overlap with saved drafts and reviewer-provided source excerpts, citation formatting, claim-support cues, writing, SEO, and technical examples. Similarity is a human-review signal, not proof of plagiarism.
 - Persisted quality reports and article revisions, with content-bound human review decisions. Editing a reviewed draft marks the previous decision stale; approval does not publish an article.
 - Optional Pexels or Unsplash search. Results are inserted only after selection and include photographer/provider attribution; image generation is disabled.
+- One Markdown-to-Blogger rendering pipeline supports responsive tables, captioned/attributed images, safe HTML, and user-authored process diagrams rendered as portable SVG. Live-post internal-link and previous/next suggestions use verified Blogger URLs.
 - Confirmed Blogger draft creation. The app does not publish drafts automatically.
 - Manually triggered previous/next navigation sync for LIVE Blogger posts. It changes live post HTML only after confirmation and reports partial failures.
 - Google Search Console and Blogger API integrations when owner OAuth is configured.
@@ -31,7 +33,7 @@ If Python is installed elsewhere, use that `python.exe` in the first command. Ke
 
 To exercise the local application without external credentials, open the editor, enter a title and Markdown, preview it, and save a draft. The article renderer and local database work without AI or Google credentials. AI generation, image search, OAuth, Blogger, and Search Console require their corresponding server-side environment variables. Do not put API keys in frontend files.
 
-Local article data, revisions, quality reports, review decisions, and Google OAuth credentials are stored in `content_ops.db` by default. Set `CONTENT_OPS_DB` to select another SQLite path. The application has no owner-password login; its APIs are accessible to anyone who can reach the deployment unless access is restricted outside the application.
+Local article data, revisions, quality reports, review decisions, and Google OAuth credentials are stored in `content_ops.db` by default. Set `CONTENT_OPS_DB` to select another SQLite path. Google OAuth binds its signed state and separate PKCE verifier to short-lived HttpOnly cookies; the verifier is never sent in the authorization URL. Saved credentials still require durable server-side storage. The application has no owner-password login; its APIs are accessible to anyone who can reach the deployment unless access is restricted outside the application.
 
 ## Content review
 
@@ -77,11 +79,11 @@ The repository contains `vercel.json` for its FastAPI/static frontend deployment
 | `UNSPLASH_ACCESS_KEY` | Optional server-side Unsplash search credential |
 Use only providers/models that are currently available to your account. Provider limits and pricing can change; check each provider's current terms before enabling it. Stock image APIs also have their own attribution rules and quotas. This app does not automatically switch providers or claim any provider is unlimited or permanently free.
 
-In Google Cloud, enable the Blogger API and Search Console API, configure the OAuth consent screen, and add the exact `GOOGLE_OAUTH_REDIRECT_URI` value to the OAuth client's authorized redirect URIs. Google identity is verified during OAuth, but this does not authorize the separate content-management API. OAuth credentials and provider keys must remain in deployment secrets.
+In Google Cloud, enable the Blogger API and Search Console API, configure the OAuth consent screen, and add the exact callback URL shown in the Blogger connection panel (or `GOOGLE_OAUTH_REDIRECT_URI`) to the OAuth client's authorized redirect URIs. If a saved credential is incomplete or invalid, the panel reports that reconnection is required. Google identity is verified during OAuth, but this does not authorize the separate content-management API. OAuth credentials and provider keys must remain in deployment secrets.
 
 ## Important hosting limitation
 
-Vercel function storage is temporary. This app's SQLite database defaults to `/tmp/content_ops.db` on Vercel, so articles, quality reports, revisions, review decisions, OAuth state/credentials, and settings may not persist across function instances or deployments. Do not rely on it as durable production storage. A durable database/storage service would add an external dependency and may have cost or quota limits; none is added here. Vercel serverless functions also do not create a continuously running queue worker. Generation and synchronization run only after user actions.
+Vercel function storage is temporary. This app's SQLite database defaults to `/tmp/content_ops.db` on Vercel, so articles, quality reports, revisions, review decisions, saved OAuth credentials, and settings may not persist across function instances or deployments. OAuth state itself is short-lived and browser-bound, not stored in SQLite. Do not rely on the temporary database as durable production storage. A durable database/storage service would add an external dependency and may have cost or quota limits; none is added here. Vercel serverless functions also do not create a continuously running queue worker. Generation and synchronization run only after user actions.
 
 The eBook PWA is a storefront/catalog, not a protected eBook reader. It sends checkout to each product's configured seller URL. Offline mode caches the app and catalog only; purchased files are delivered by the seller. A PDF/EPUB reader, protected downloads, purchase verification, and cross-device accounts are not implemented.
 
@@ -91,8 +93,8 @@ Free hosting and provider quotas are subject to platform limits and can change. 
 
 The application does not authenticate visitors. If deployed to a public URL, its API exposes saved drafts and review history, permits article/product/affiliate changes and deletions, can trigger configured AI/image-provider usage, and allows Google-connected Blogger/Search Console operations (including explicitly confirmed Blogger draft creation and live navigation updates). Google OAuth connects those integrations; it does **not** authorize access to this application. Keep the deployment private using Vercel Deployment Protection or an equivalent platform-level access control before production use. Do not expose a public deployment with real integration credentials or private content. This repository does not configure or verify platform protection, so this change must not be deployed publicly as-is.
 
-Google OAuth tokens remain server-side and are not sent to browser JavaScript. Vercel's SQLite `/tmp` storage remains ephemeral and cannot reliably preserve articles, revisions, reports, decisions, OAuth state, or integration credentials across function instances and deployments. Select and configure an approved persistent store before depending on production records; no paid or external database has been added.
+Google OAuth tokens remain server-side and are not sent to browser JavaScript. Vercel's SQLite `/tmp` storage remains ephemeral and cannot reliably preserve articles, revisions, reports, decisions, saved OAuth credentials, or settings across function instances and deployments. Select and configure an approved persistent store before depending on production records; no paid or external database has been added.
 
-The automated commands above cover Python compilation, mocked unit tests, and JavaScript syntax. They do not prove that a live OAuth login, Blogger draft creation, Search Console report, AI provider request, Vercel deployment, or Pexels/Unsplash request succeeds. Those require credentials and a controlled live test.
+The automated commands above cover Python compilation, mocked unit tests, and JavaScript syntax. They do not prove that a live OAuth login, Blogger draft creation, Search Console report, AI provider request, Vercel deployment, or Pexels/Unsplash request succeeds. Those require credentials and a controlled live test. A saved token record that is missing Google authorized-user fields must be replaced by a fresh OAuth connection.
 
 Project architecture and contribution guidance: [Project structure](docs/PROJECT_STRUCTURE.md), [development rules](docs/DEVELOPMENT_RULES.md), and [content quality review](docs/CONTENT_QUALITY.md).

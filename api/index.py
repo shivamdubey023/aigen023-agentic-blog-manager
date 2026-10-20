@@ -1,13 +1,14 @@
 """FastAPI application for NextGen Tech Notes — Multi-Model AI Agentic Blog Hub."""
 from __future__ import annotations
 import json
+import hmac
 import re
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Literal, Optional
 
 from fastapi import FastAPI, HTTPException, Path as ApiPath, Request
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -197,6 +198,23 @@ def run_autopilot(req: AutopilotRequest):
     model = req.model.strip()
     if model not in SUPPORTED_PROVIDERS[chosen_provider]["models"]:
         raise HTTPException(status_code=400, detail="Choose a supported model for the selected provider.")
+    selected_product = None
+    if req.include_product:
+        if not req.product_id:
+            raise HTTPException(status_code=400, detail="Select a relevant product or turn off product insertion.")
+        selected_product = db.get_product(req.product_id)
+        if not selected_product:
+            raise HTTPException(status_code=404, detail="The selected product is no longer available.")
+    selected_affiliate = None
+    if req.include_affiliate:
+        if not req.affiliate_id:
+            raise HTTPException(status_code=400, detail="Select a relevant affiliate recommendation or turn it off.")
+        selected_affiliate = next(
+            (item for item in db.list_affiliates() if item["id"] == req.affiliate_id),
+            None,
+        )
+        if not selected_affiliate:
+            raise HTTPException(status_code=404, detail="The selected affiliate recommendation is no longer available.")
     if not resolve_key_for_provider(chosen_provider):
         raise HTTPException(
             status_code=400,
@@ -219,37 +237,22 @@ def run_autopilot(req: AutopilotRequest):
 
         # 2. Product / eBook card (optional)
         product_snippet = ""
-        if req.include_product:
-            prod = None
-            if req.product_id:
-                prod = db.get_product(req.product_id)
-            if not prod:
-                prods = db.list_products()
-                prod = prods[0] if prods else None
-            if prod:
-                product_snippet = ebook_card_box(
-                    title=prod["title"],
-                    product_url=prod["url"],
-                    price=prod.get("price") or "Special Offer",
-                    tagline=prod.get("description") or "Recommended comprehensive developer resource.",
-                )
+        if selected_product:
+            product_snippet = ebook_card_box(
+                title=selected_product["title"],
+                product_url=selected_product["url"],
+                price=selected_product.get("price") or "Special Offer",
+                tagline=selected_product.get("description") or "Recommended comprehensive developer resource.",
+            )
 
         # 3. Affiliate snippet (optional)
         affiliate_snippet = ""
-        if req.include_affiliate:
-            aff = None
-            if req.affiliate_id:
-                affs = db.list_affiliates()
-                aff = next((a for a in affs if a["id"] == req.affiliate_id), None)
-            if not aff:
-                affs = db.list_affiliates()
-                aff = affs[0] if affs else None
-            if aff:
-                affiliate_snippet = affiliate_box(
-                    product_name=aff["product_name"],
-                    tracking_url=aff["tracking_url"],
-                    disclosure=aff["disclosure_snippet"],
-                )
+        if selected_affiliate:
+            affiliate_snippet = affiliate_box(
+                product_name=selected_affiliate["product_name"],
+                tracking_url=selected_affiliate["tracking_url"],
+                disclosure=selected_affiliate["disclosure_snippet"],
+            )
 
         # 4. Render HTML with schema and TOC. Images are explicitly chosen later.
         rendered, schema = render_article(
@@ -668,50 +671,108 @@ def get_canonical_callback_url(request: Request, passed_redirect: str = "") -> s
     return f"https://{host}/api/oauth/callback"
 
 @app.get("/api/oauth/url")
-def get_oauth_url(request: Request, redirect_uri: str = ""):
+def get_oauth_url(request: Request, response: Response, redirect_uri: str = ""):
     client_id = get_google_client_id()
     client_secret = get_google_client_secret()
     if not client_id or not client_secret:
-        raise HTTPException(status_code=400, detail="Missing Google client_id or client_secret in .env.")
+        raise HTTPException(
+            status_code=503,
+            detail="Google OAuth is not configured. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET on the server.",
+        )
 
     target_redirect = get_canonical_callback_url(request, redirect_uri)
 
     dummy_session: dict[str, Any] = {}
     auth_url = start_oauth(client_id, client_secret, dummy_session, redirect_uri=target_redirect)
+    response.set_cookie(
+        "aigen_google_oauth_state",
+        dummy_session["oauth_state"],
+        max_age=900,
+        path="/api/oauth",
+        secure=request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https",
+        httponly=True,
+        samesite="lax",
+    )
+    response.set_cookie(
+        "aigen_google_oauth_pkce",
+        dummy_session["oauth_verifier"],
+        max_age=900,
+        path="/api/oauth",
+        secure=request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https",
+        httponly=True,
+        samesite="lax",
+    )
+    response.headers["Cache-Control"] = "no-store"
     return {
         "url": auth_url,
         "redirect_uri": target_redirect,
         "instruction": f"Add '{target_redirect}' to Authorized redirect URIs in Google Cloud Console.",
     }
 
+def _oauth_result_redirect(request: Request, result: str) -> RedirectResponse:
+    response = RedirectResponse(url=f"/?oauth_{result}", status_code=303)
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.delete_cookie(
+        "aigen_google_oauth_state",
+        path="/api/oauth",
+        secure=request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https",
+        httponly=True,
+        samesite="lax",
+    )
+    response.delete_cookie(
+        "aigen_google_oauth_pkce",
+        path="/api/oauth",
+        secure=request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https",
+        httponly=True,
+        samesite="lax",
+    )
+    return response
+
 @app.get("/api/oauth/callback")
-def handle_oauth_callback(request: Request, code: str = "", state: str = ""):
+def handle_oauth_callback(request: Request, code: str = "", state: str = "", error: str = ""):
     client_id = get_google_client_id()
     client_secret = get_google_client_secret()
     target_redirect = get_canonical_callback_url(request)
+    expected_state = request.cookies.get("aigen_google_oauth_state", "")
+    code_verifier = request.cookies.get("aigen_google_oauth_pkce", "")
+    if not expected_state or not code_verifier or not state or not hmac.compare_digest(expected_state, state):
+        return _oauth_result_redirect(request, "error=connection_failed")
+    if error:
+        return _oauth_result_redirect(request, "error=consent_not_completed")
     if not client_id or not client_secret:
-        return HTMLResponse("<h3>Missing Google OAuth credentials in .env.</h3>", status_code=400)
+        return _oauth_result_redirect(request, "error=configuration_missing")
     try:
-        dummy_session: dict[str, Any] = {}
+        dummy_session: dict[str, Any] = {"oauth_state": state, "oauth_verifier": code_verifier}
         creds = finish_oauth(code, state, dummy_session, client_id=client_id, client_secret=client_secret, redirect_uri=target_redirect)
-        response = RedirectResponse(url="/?oauth_success=1", status_code=303)
-        response.headers["Cache-Control"] = "no-store"
-        response.headers["Referrer-Policy"] = "no-referrer"
-        return response
-    except Exception as exc:
-        return HTMLResponse(
-            "<h3>Google connection failed.</h3><p>Check the server configuration and restart the connection.</p>",
-            status_code=500,
-            headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
-        )
+        return _oauth_result_redirect(request, "success=1")
+    except Exception:
+        return _oauth_result_redirect(request, "error=connection_failed")
 
 @app.get("/api/oauth/status")
 def oauth_status(request: Request):
     creds, user = resolve_current_credentials(request)
+    configured = bool(get_google_client_id() and get_google_client_secret())
+    saved_credential = db.get_system_credential("google_api_token")
+    if creds and getattr(creds, "valid", False):
+        connection_state = "connected"
+    elif not configured:
+        connection_state = "not_configured"
+    elif saved_credential:
+        connection_state = "reconnect_required"
+    else:
+        connection_state = "not_connected"
+    public_user = {
+        key: value
+        for key in ("email", "name")
+        if isinstance((value := user.get(key)), str)
+    }
     return {
-        "connected": bool(creds and getattr(creds, "valid", False)),
-        "user": user,
-        "configured_redirect_uri": get_google_redirect_uri(),
+        "connected": connection_state == "connected",
+        "connection_state": connection_state,
+        "user": public_user,
+        "configured": configured,
+        "configured_redirect_uri": get_canonical_callback_url(request),
     }
 
 @app.get("/api/blogger/blogs")
@@ -735,6 +796,36 @@ def get_blogger_posts(request: Request, blog_id: str, limit: int = 50):
         return {"posts": posts}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
+
+@app.get("/api/blogger/navigation/preview")
+def preview_blogger_navigation(request: Request, blog_id: str):
+    if not blog_id.strip():
+        raise HTTPException(status_code=400, detail="Select a Blogger blog before previewing navigation.")
+    creds, _ = resolve_current_credentials(request)
+    if not creds:
+        raise HTTPException(status_code=401, detail="Google account not connected.")
+    try:
+        ordered, skipped = order_live_posts(list_posts(creds, blog_id, limit=500))
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Could not preview Blogger navigation: {exc}") from exc
+    sequence = []
+    for index, post in enumerate(ordered):
+        previous = ordered[index - 1] if index > 0 else None
+        following = ordered[index + 1] if index + 1 < len(ordered) else None
+        sequence.append({
+            "id": str(post.get("id") or ""),
+            "title": str(post.get("title") or "Untitled post"),
+            "url": str(post.get("url") or ""),
+            "previous": {
+                "title": str(previous.get("title") or "Untitled post"),
+                "url": str(previous.get("url") or ""),
+            } if previous else None,
+            "next": {
+                "title": str(following.get("title") or "Untitled post"),
+                "url": str(following.get("url") or ""),
+            } if following else None,
+        })
+    return {"posts": sequence, "skipped_missing_published_date": skipped}
 
 @app.post("/api/blogger/draft")
 def upload_blogger_draft(req: CreateBloggerDraftRequest, request: Request):

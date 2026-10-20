@@ -6,4 +6,5 @@ google-auth-oauthlib>=1.2.1
 google-api-python-client>=2.150.0
 google-auth-httplib2>=0.2.0
 Markdown>=3.7
+bleach[css]>=6.1.0
 requests>=2.32.0

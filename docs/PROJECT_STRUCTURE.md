@@ -18,6 +18,7 @@ This is a Vercel-hosted FastAPI application with a plain HTML/CSS/JavaScript fro
 │   ├── content_quality.py
 │   ├── env_config.py
 │   ├── image_renderer.py
+│   ├── article_visuals.py
 │   ├── llm_engine.py
 │   ├── rewriter.py
 │   ├── stock_images.py
@@ -71,11 +72,12 @@ This is a Vercel-hosted FastAPI application with a plain HTML/CSS/JavaScript fro
 | `core/llm_engine.py` | Supported AI providers, model selection, key resolution, and server-side article generation. |
 | `core/content_quality.py` | Bounded, deterministic text-overlap, writing, citation-format, claim-cue, SEO, and code-review heuristics. It does not fetch sources, verify facts, execute code, or infer authorship. |
 | `core/rewriter.py` | AI-assisted rewriting and HTML-to-text conversion. |
-| `property_a_blog/seo_optimizer.py` | Markdown rendering, headings/TOC, schema, affiliate/product blocks, and editorial warnings. |
-| `core/database.py` | SQLite schema, migrations, article revisions, quality reports, human review decisions, queue records, products, affiliates, OAuth state, and server-side credentials. |
+| `property_a_blog/seo_optimizer.py` | Shared Markdown-to-Blogger HTML rendering, headings/TOC, safe HTML sanitization, responsive tables, image figures, SVG diagram insertion, schema, affiliate/product blocks, and editorial warnings. |
+| `core/article_visuals.py` | Deterministic self-contained SVG diagrams from user-authored process steps; no external image-generation service. |
+| `core/database.py` | SQLite schema, migrations, article revisions, quality reports, human review decisions, queue records, products, affiliates, and server-side credentials. |
 | `core/env_config.py` | Environment and local `.env` configuration accessors. |
 | `core/stock_images.py`, `core/image_renderer.py` | Pexels/Unsplash search validation and safe image markup. |
-| `property_a_blog/blogger_client.py` | Google OAuth, Blogger API operations, and Search Console report adapter. |
+| `property_a_blog/blogger_client.py` | Google OAuth with signed, expiring state/PKCE verification, Blogger API operations, and Search Console report adapter. |
 | `property_a_blog/navigation.py` | Ordering live posts and building idempotent previous/next navigation. |
 | `tests/` | `unittest` tests for business logic, SQLite, quality-review persistence, API-backed PWA responses, responsive web navigation, and mocked integrations. |
 | `app.py` | Legacy Streamlit dashboard. It is not a Vercel entry point; its queue batch controls, CSV export, date-range report UI, and some repost/settings workflows have not all been migrated to the browser application. It has no owner login; keep any separately hosted instance behind platform-level access protection. |
@@ -101,9 +103,11 @@ Canonical environment variables read by the application:
 - `GROQ_API_KEY`, `GEMINI_API_KEY`, `COHERE_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`: optional server-side AI credentials.
 - `PEXELS_API_KEY`, `UNSPLASH_ACCESS_KEY`: optional server-side stock-image credentials.
 
-Local development uses `content_ops.db` in the repository directory unless `CONTENT_OPS_DB` is set. Vercel deployments default to `/tmp/content_ops.db`; this filesystem is ephemeral and instance-local, so the database is **not durable production storage**. OAuth state and stored settings have the same limitation. No persistent database service is configured; do not assume that data survives deployments or another function instance.
+Local development uses `content_ops.db` in the repository directory unless `CONTENT_OPS_DB` is set. Vercel deployments default to `/tmp/content_ops.db`; this filesystem is ephemeral and instance-local, so the database is **not durable production storage**. Saved OAuth credentials and settings have the same limitation; the short-lived OAuth state is browser-bound and is not stored in SQLite. No persistent database service is configured; do not assume that data survives deployments or another function instance.
 
-The application does not authenticate visitors. Configure Vercel Deployment Protection or equivalent platform access control for the full application before production use; the repository does not configure or verify that protection. Google OAuth tokens are read and refreshed from server-side SQLite and are not returned in OAuth callback HTML, JavaScript storage, or client-readable cookies. SQLite is not encrypted at rest by this application, and on Vercel its `/tmp` location is ephemeral; configure suitable durable protected storage before relying on credentials or editorial records in production.
+The application does not authenticate visitors. Configure Vercel Deployment Protection or equivalent platform access control for the full application before production use; the repository does not configure or verify that protection. OAuth uses a short-lived signed state value and a separate PKCE verifier, each bound to an HttpOnly, SameSite=Lax browser cookie. The signed state is returned through Google's OAuth protocol and contains no credential secret; the PKCE verifier is never sent in the authorization URL. Neither is stored in SQLite. Google OAuth access/refresh tokens are read and refreshed from server-side SQLite and are not returned in OAuth callback HTML, JavaScript storage, or client-readable cookies. SQLite is not encrypted at rest by this application, and on Vercel its `/tmp` location is ephemeral; configure suitable durable protected storage before relying on credentials or editorial records in production.
+
+Articles remain backward-compatible Markdown in the existing article/revision records. Selected image metadata (alt text, caption, and provider/photographer attribution) and diagram step specifications are represented in Markdown, so older drafts need no database migration. The shared renderer converts tables to responsive HTML and diagrams to self-contained SVG before preview or Blogger draft creation. Navigation suggestions are read-only and use LIVE Blogger post URLs; applying navigation changes remains a separate explicitly confirmed sync.
 
 Quality reports include evidence and severity per finding, not an aggregate score. Similarity is a human-review signal, not a plagiarism determination. Citation reachability/relevance, factual accuracy, code execution, and AI authorship are explicitly not verified.
 

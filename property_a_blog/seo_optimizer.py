@@ -3,7 +3,11 @@ from __future__ import annotations
 import html, json, re, unicodedata
 from datetime import date
 from typing import Any
+from urllib.parse import urlparse
+import bleach
+from bleach.css_sanitizer import CSSSanitizer
 import markdown
+from core.article_visuals import parse_flow_chains, render_flow_diagram
 
 def slugify_heading(value: str) -> str:
     value = unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode("ascii").lower()
@@ -12,7 +16,19 @@ def slugify_heading(value: str) -> str:
 
 def parse_headings(markdown_text: str) -> list[dict[str, str]]:
     headings, used = [], {}
+    fence_char = ""
+    fence_length = 0
     for line in markdown_text.splitlines():
+        fence = re.match(r"^\s*(`{3,}|~{3,})", line)
+        if fence:
+            marker = fence.group(1)
+            if not fence_char:
+                fence_char, fence_length = marker[0], len(marker)
+            elif marker[0] == fence_char and len(marker) >= fence_length:
+                fence_char, fence_length = "", 0
+            continue
+        if fence_char:
+            continue
         match = re.match(r"^(#{2,4})\s+(.+?)\s*#*\s*$", line)
         if not match: continue
         title, base = match.group(2).strip(), slugify_heading(match.group(2).strip())
@@ -55,9 +71,144 @@ def build_schema(title: str, description: str, keywords: str, faq: list[dict[str
 def _inject_jsonld(body: str, schema: dict[str, Any]) -> str:
     scripts = []
     for value in schema.values():
-        payload = json.dumps(value, ensure_ascii=False).replace("</", "<\\\\/")
+        payload = (
+            json.dumps(value, ensure_ascii=False)
+            .replace("&", "\\u0026")
+            .replace("<", "\\u003c")
+            .replace(">", "\\u003e")
+        )
         scripts.append('<script type="application/ld+json">' + payload + '</script>')
-    return "\\n".join(scripts) + "\\n" + body
+    return "\n".join(scripts) + "\n" + body
+
+
+_ALLOWED_TAGS = set(bleach.sanitizer.ALLOWED_TAGS) | {
+    "h1", "h2", "h3", "h4", "p", "div", "span", "figure", "figcaption",
+    "img", "table", "caption", "thead", "tbody", "tfoot", "tr", "th", "td",
+    "pre", "code", "hr", "br", "del", "ins", "sup", "sub", "details", "summary",
+    "aside", "nav", "svg", "g", "rect", "line", "path", "defs", "marker",
+    "title", "desc", "text", "tspan",
+}
+_ALLOWED_ATTRIBUTES = {
+    "a": {"href", "title", "rel", "target"},
+    "img": {"src", "alt", "title", "width", "height", "loading"},
+    "h1": {"id"}, "h2": {"id"}, "h3": {"id"}, "h4": {"id"},
+    "div": {"class", "style"}, "span": {"class", "style"},
+    "pre": {"class"}, "code": {"class"},
+    "figure": {"class", "role", "aria-labelledby", "style"},
+    "figcaption": {"class", "style"},
+    "aside": {"class", "style"}, "nav": {"class", "aria-label", "style"},
+    "p": {"class", "style"},
+    "table": {"class", "style"}, "th": {"scope", "colspan", "rowspan"},
+    "td": {"colspan", "rowspan"},
+    "svg": {"xmlns", "width", "height", "viewbox", "role", "aria-labelledby", "preserveaspectratio", "style"},
+    "g": {"fill", "stroke", "stroke-width"},
+    "rect": {"x", "y", "width", "height", "rx", "fill", "stroke", "stroke-width"},
+    "line": {"x1", "y1", "x2", "y2", "stroke", "stroke-width", "marker-end"},
+    "path": {"d", "fill", "stroke", "stroke-width"},
+    "marker": {"id", "markerwidth", "markerheight", "refx", "refy", "orient", "markerunits"},
+    "title": {"id"}, "desc": {"id"},
+    "text": {"x", "y", "fill", "font-family", "font-size", "font-weight", "text-anchor", "dominant-baseline"},
+    "tspan": {"x", "dy"},
+}
+_CSS_SANITIZER = CSSSanitizer(allowed_css_properties={
+    "align-items", "background-color", "border", "border-radius",
+    "box-shadow", "color", "display", "flex", "flex-basis", "flex-wrap", "font-family",
+    "font-size", "font-weight", "gap", "justify-content", "line-height", "list-style",
+    "margin", "max-height", "max-width", "object-fit", "overflow", "overflow-x", "padding",
+    "position", "text-align", "text-decoration", "text-transform", "width",
+})
+
+
+def _allow_article_attribute(tag: str, name: str, value: str) -> bool:
+    name = name.lower()
+    if name not in _ALLOWED_ATTRIBUTES.get(tag, set()):
+        return False
+    if name == "marker-end":
+        return bool(re.fullmatch(r"url\(#arrow-[a-z0-9-]+\)", value))
+    if name == "id":
+        return bool(re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_-]{0,80}", value))
+    if name == "xmlns":
+        return value == "http://www.w3.org/2000/svg"
+    if name in {"fill", "stroke"}:
+        return bool(re.fullmatch(r"#[0-9a-fA-F]{3,8}|[a-zA-Z]{1,20}|none", value))
+    if name in {"x", "y", "width", "height", "rx", "x1", "y1", "x2", "y2",
+                "stroke-width", "font-size", "colspan", "rowspan", "markerwidth",
+                "markerheight", "refx", "refy"}:
+        return bool(re.fullmatch(r"-?\d+(?:\.\d+)?", value))
+    if name == "d":
+        return bool(re.fullmatch(r"[MmLlHhVvCcSsQqTtAaZz0-9., +\-]+", value))
+    if name in {"src", "href"}:
+        if name == "href" and (value.startswith("#") or (not urlparse(value).scheme and not value.startswith("//"))):
+            return True
+        parsed = urlparse(value)
+        allowed_schemes = {"https"} if tag == "img" else {"http", "https", "mailto"}
+        return parsed.scheme in allowed_schemes and (parsed.scheme == "mailto" or bool(parsed.hostname))
+    if name == "style":
+        return True
+    if name in {"aria-labelledby", "aria-label", "role", "scope", "rel", "target",
+                "class", "loading", "preserveaspectratio", "orient", "markerunits",
+                "font-family", "text-anchor", "dominant-baseline"}:
+        return bool(re.fullmatch(r"[a-zA-Z0-9 _-]{1,180}", value))
+    return True
+
+
+def _render_diagram_fences(text: str) -> tuple[str, dict[str, str]]:
+    diagrams: dict[str, str] = {}
+    pattern = re.compile(
+        r'(?ms)^```diagram(?:\s+title="([^"\n]{0,160})")?\s*\n(.*?)^\s*```\s*$'
+    )
+
+    def replace(match: re.Match[str]) -> str:
+        specification = match.group(2).strip()
+        caption = match.group(1) or "Process flow"
+        index = len(diagrams)
+        token = f"AIGEN023DIAGRAMTOKEN{index}END"
+        try:
+            diagrams[token] = render_flow_diagram(specification, caption, str(index))
+        except ValueError:
+            return match.group(0)
+        return token
+
+    return pattern.sub(replace, text), diagrams
+
+
+def _prepare_image_figures(body: str) -> str:
+    image_tag = re.compile(r"<img\b[^>]*>", re.I)
+
+    def figure(match: re.Match[str]) -> str:
+        image = match.group(1)
+        title = re.search(r'\btitle=(["\'])(.*?)\1', image, re.I | re.S)
+        caption = html.escape(html.unescape(title.group(2)).strip()) if title else ""
+        opening = f'<figure class="article-figure">{image}'
+        return f"{opening}<figcaption>{caption}</figcaption></figure>" if caption else f"{opening}</figure>"
+
+    return re.sub(
+        r"<p>\s*(<img\b[^>]*>)\s*</p>",
+        figure,
+        body,
+        flags=re.I | re.S,
+    )
+
+
+def _sanitize_article_html(body: str) -> str:
+    return bleach.clean(
+        body,
+        tags=_ALLOWED_TAGS,
+        attributes=_allow_article_attribute,
+        protocols={"http", "https", "mailto"},
+        strip=True,
+        strip_comments=True,
+        css_sanitizer=_CSS_SANITIZER,
+    )
+
+
+def _wrap_responsive_tables(body: str) -> str:
+    return re.sub(
+        r"<table\b([^>]*)>(.*?)</table>",
+        r'<div class="article-table-scroll" style="max-width:100%;overflow-x:auto;"><table\1>\2</table></div>',
+        body,
+        flags=re.I | re.S,
+    )
 def affiliate_box(product_name: str, tracking_url: str, disclosure: str) -> str:
     url = html.escape(tracking_url.strip(), quote=True)
     if not url.startswith(("https://","http://")): raise ValueError("Affiliate URL must begin with http:// or https://")
@@ -117,12 +268,20 @@ def render_article(markdown_text: str, title: str, primary_keyword: str="", *, i
         first = re.search(r"(?m)^#\s+.+$",text)
         toc = build_toc(headings)
         text = text[:first.end()] + "\n\n" + toc + text[first.end():] if first else toc + text
+    text, diagrams = _render_diagram_fences(text)
     body = markdown.markdown(text, extensions=["extra","sane_lists","tables","fenced_code"])
     body = _add_heading_ids(body, headings)
+    body = _prepare_image_figures(body)
+    body = _sanitize_article_html(body)
+    body = _wrap_responsive_tables(body)
+    for token, diagram_html in diagrams.items():
+        body = body.replace(token, f"</p>{_sanitize_article_html(diagram_html)}<p>")
+    body = re.sub(r"<p>\s*</p>", "", body)
     schema = build_schema(title,description or f"Practical tutorial about {primary_keyword or title}.",primary_keyword,faq,blog_url)
     body = _inject_jsonld(body,schema)
     if featured_image_html:
         # Inject right after opening H1 if possible, else at the beginning
+        featured_image_html = _sanitize_article_html(featured_image_html)
         h1_match = re.search(r"(<h1[^>]*>.*?</h1>)", body, flags=re.I|re.S)
         if h1_match:
             body = body[:h1_match.end()] + "\n" + featured_image_html + body[h1_match.end():]
@@ -130,6 +289,7 @@ def render_article(markdown_text: str, title: str, primary_keyword: str="", *, i
             body = featured_image_html + "\n" + body
     if section_image_html:
         # Inject architectural diagram before the second H2 section
+        section_image_html = _sanitize_article_html(section_image_html)
         h2_matches = list(re.finditer(r"(<h2[^>]*>.*?</h2>)", body, flags=re.I|re.S))
         if len(h2_matches) >= 2:
             target_h2 = h2_matches[1]
@@ -138,9 +298,9 @@ def render_article(markdown_text: str, title: str, primary_keyword: str="", *, i
             target_h2 = h2_matches[0]
             body = body[:target_h2.start()] + "\n" + section_image_html + "\n" + body[target_h2.start():]
     if ebook_html:
-        body += "\n" + ebook_html
+        body += "\n" + _sanitize_article_html(ebook_html)
     if affiliate_html:
-        body += "\n" + affiliate_html
+        body += "\n" + _sanitize_article_html(affiliate_html)
     return body,schema
 
 def content_quality_checks(title: str, markdown_text: str) -> list[str]:
@@ -153,4 +313,35 @@ def content_quality_checks(title: str, markdown_text: str) -> list[str]:
     if not re.search(r"(?im)^#{2,3}\s+",markdown_text): warnings.append("Add useful H2/H3 sections.")
     if not re.search(r"(?i)\b(test|reproduce|verify|expected output|traceback)\b",markdown_text): warnings.append("Add reproducible verification steps or expected output where appropriate.")
     if not re.search(r"(?i)\b(source|documentation|reference|official docs)\b",markdown_text): warnings.append("Add relevant, checked references; never fabricate citations.")
+    if re.search(r"(?m)^#{2,6}\s*$", markdown_text):
+        warnings.append("A section heading is empty.")
+    if re.search(r"(?m)^#{5,6}\s+", markdown_text):
+        warnings.append("Avoid heading levels deeper than H4; reorganize the section under a meaningful H2/H3.")
+    heading_levels = [int(heading["level"]) for heading in parse_headings(markdown_text)]
+    previous_level = 1
+    skipped_heading_level = False
+    for level in heading_levels:
+        if level > previous_level + 1:
+            skipped_heading_level = True
+            break
+        previous_level = level
+    if skipped_heading_level:
+        warnings.append("Check heading levels; use H2 for major sections and avoid skipping levels.")
+    if re.search(r"(?m)^```diagram\b", markdown_text):
+        for match in re.finditer(r'(?ms)^```diagram(?:\s+title="([^"\n]{0,160})")?\s*\n(.*?)^\s*```\s*$', markdown_text):
+            try:
+                parse_flow_chains(match.group(2).strip())
+            except ValueError as exc:
+                warnings.append(f"Diagram could not be rendered ({exc}); correct the flow or remove the diagram.")
+    for match in re.finditer(r"!\[([^\]]*)\]\(([^)\s]+)(?:\s+[^)]*)?\)", markdown_text):
+        if not match.group(1).strip():
+            warnings.append("An article image is missing descriptive alternative text.")
+        if not match.group(2).startswith("https://"):
+            warnings.append("An article image uses an unsupported URL; use an HTTPS image source.")
+    if re.search(r"\]\(\s*(?:javascript|data):", markdown_text, re.I):
+        warnings.append("A link uses an unsafe URL scheme and will be removed from the rendered HTML.")
+    anchors = set(re.findall(r"\]\(#([^)]+)\)", markdown_text))
+    heading_anchors = {heading["anchor"] for heading in parse_headings(markdown_text)}
+    if anchors - heading_anchors:
+        warnings.append("A table-of-contents or internal anchor points to a heading that does not exist.")
     return warnings

@@ -60,6 +60,10 @@ class ResponsiveWebAppTests(unittest.TestCase):
             'id="btn-quality-request-changes"',
             'id="btn-quality-history"',
             'id="btn-quality-revisions"',
+            'id="btn-insert-diagram"',
+            'id="editor-internal-link"',
+            'id="internal-link-preview"',
+            'id="btn-preview-navigation"',
         ):
             self.assertIn(control, page.text)
 
@@ -67,6 +71,32 @@ class ResponsiveWebAppTests(unittest.TestCase):
         self.assertEqual(script.status_code, 200)
         self.assertNotIn("localStorage.getItem('google_api_token')", script.text)
         self.assertNotIn("X-Google-Token", script.text)
+
+    def test_vault_has_separate_responsive_product_and_affiliate_workspaces(self):
+        page = self.client.get("/")
+        self.assertEqual(page.status_code, 200)
+        for element in (
+            'id="tab-monetize"',
+            'id="product-form"',
+            'id="affiliate-form"',
+            'id="products-table-container"',
+            'id="affiliates-table-container"',
+            'id="ebook-live-preview"',
+            'id="vault-product-count"',
+            'id="vault-affiliate-count"',
+            'href="/ebook/"',
+        ):
+            self.assertIn(element, page.text)
+
+        script = self.client.get("/static/js/app.js")
+        self.assertEqual(script.status_code, 200)
+        self.assertIn("trigger_keywords_list", script.text)
+        self.assertIn("Products could not be loaded", script.text)
+        self.assertIn("Affiliate recommendations could not be loaded", script.text)
+
+        stylesheet = self.client.get("/static/css/style.css")
+        self.assertIn(".vault-hero", stylesheet.text)
+        self.assertIn(".vault-item", stylesheet.text)
 
 
 if __name__ == "__main__":

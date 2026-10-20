@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>NextGen Tech Notes — Autonomous Agentic Blog Bot</title>
   <meta name="description" content="Mobile-first autonomous AI blogging bot, AdSense quality enhancer, and eBook monetization engine.">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%' y1='0%' x2='100%' y2='100%'><stop offset='0%' stop-color='%236366f1'/><stop offset='100%' stop-color='%2306b6d4'/></linearGradient></defs><rect width='100' height='100' rx='25' fill='url(%23g)'/><text y='68' x='50' font-size='52' text-anchor='middle' fill='%23ffffff' font-family='sans-serif' font-weight='900'>NT</text></svg>">
@@ -12,8 +12,19 @@
   <link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body>
+  <section id="owner-login-gate" class="owner-login-gate" aria-labelledby="owner-login-title">
+    <form id="owner-login-form" class="owner-login-card">
+      <span class="badge purple">Private content workspace</span>
+      <h1 id="owner-login-title">Owner sign-in</h1>
+      <p id="owner-login-message" class="section-desc" aria-live="polite">Checking application access…</p>
+      <label for="owner-login-password">Owner password</label>
+      <input id="owner-login-password" class="form-control" type="password"
+        autocomplete="current-password" required maxlength="1024">
+      <button id="owner-login-submit" class="btn btn-primary full-width" type="submit">Sign in</button>
+    </form>
+  </section>
   <!-- App Container -->
-  <div id="app-wrapper">
+  <div id="app-wrapper" class="hidden" aria-hidden="true">
     <!-- Top Header -->
     <header class="app-header">
       <div class="header-left">
@@ -32,11 +43,12 @@
         <button class="btn btn-outline btn-sm" id="connect-google-btn">
           Google Login
         </button>
+        <button class="btn btn-outline btn-sm hidden" id="owner-logout-btn" type="button">Sign out</button>
       </div>
     </header>
 
     <!-- Top Navigation (Desktop) -->
-    <nav class="app-nav desktop-nav">
+    <nav class="app-nav desktop-nav" aria-label="Main navigation">
       <button class="nav-tab active" data-tab="tab-autopilot">
         <span class="tab-icon">✍️</span> Create an Article
       </button>
@@ -155,6 +167,37 @@
             <button class="btn btn-accent" id="btn-open-autopilot-in-editor">Open in Live Editor &rarr;</button>
           </div>
         </div>
+        <section class="card glass-card quality-review-panel" aria-labelledby="quality-review-title">
+          <div class="card-header">
+            <div>
+              <h2 id="quality-review-title">Content quality &amp; originality review</h2>
+              <p class="section-desc">Evidence-based prompts for human review—not plagiarism verdicts, fact verification, or an overall score.</p>
+            </div>
+            <span id="quality-review-status" class="badge blue" aria-live="polite">Save a draft to begin</span>
+          </div>
+          <div class="form-group">
+            <label for="quality-source-notes">Optional source excerpts for overlap review</label>
+            <textarea id="quality-source-notes" class="form-control" rows="3" maxlength="100000"
+              placeholder="One per line: https://docs.example.com/page | Paste a relevant excerpt"></textarea>
+            <p class="section-desc">Excerpts are compared locally and are not independently verified or sent to a provider. Do not paste confidential material.</p>
+          </div>
+          <div class="action-buttons-group quality-review-actions">
+            <button class="btn btn-primary" id="btn-quality-check">Save draft &amp; run checks</button>
+            <button class="btn btn-accent" id="btn-quality-approve" disabled>Approve reviewed draft</button>
+            <button class="btn btn-secondary" id="btn-quality-request-changes" disabled>Request changes</button>
+            <button class="btn btn-secondary" id="btn-quality-history">Load saved reports</button>
+            <button class="btn btn-secondary" id="btn-quality-revisions">Load revision history</button>
+          </div>
+          <label class="sr-only" for="quality-review-notes">Review decision notes</label>
+          <textarea id="quality-review-notes" class="form-control quality-review-notes" rows="2" maxlength="2000"
+            placeholder="Optional reviewer notes"></textarea>
+          <div id="quality-review-counts" class="quality-review-counts" aria-live="polite"></div>
+          <div id="quality-review-findings" class="quality-review-findings" aria-live="polite">
+            <p class="text-muted">Run a review to inspect originality, writing, citations, fact-support cues, SEO, and technical checks.</p>
+          </div>
+          <div id="quality-report-history" class="quality-revision-history hidden"></div>
+          <div id="quality-revision-history" class="quality-revision-history hidden"></div>
+        </section>
       </section>
 
       <!-- TAB 2: FIX LOW-VALUE POSTS (ADSENSE REWRITER) -->
@@ -306,6 +349,11 @@
         <div class="editor-layout">
           <div class="editor-toolbar">
             <input type="text" id="editor-title" class="editor-title-input" placeholder="Article Title...">
+            <div class="editor-meta-description">
+              <label for="editor-meta-description">Search description</label>
+              <input type="text" id="editor-meta-description" class="form-control"
+                maxlength="300" placeholder="Accurate summary for search snippets (optional)">
+            </div>
             <div class="toolbar-right">
               <label class="toggle-control">
                 <input type="checkbox" id="toggle-toc" checked>
@@ -518,26 +566,34 @@
     </main>
 
     <!-- Mobile Bottom Navigation Bar -->
-    <nav class="mobile-bottom-nav">
-      <button class="mobile-nav-item active" data-tab="tab-autopilot">
-        <span class="m-icon">⚡</span>
-        <span class="m-label">Auto</span>
+    <nav class="mobile-bottom-nav" aria-label="Mobile navigation">
+      <button class="mobile-nav-item active" data-tab="tab-autopilot" aria-label="Create an article">
+        <span class="m-icon" aria-hidden="true">⚡</span>
+        <span class="m-label">Create</span>
       </button>
-      <button class="mobile-nav-item" data-tab="tab-rewriter">
-        <span class="m-icon">🔄</span>
-        <span class="m-label">Fix Old</span>
+      <button class="mobile-nav-item" data-tab="tab-rewriter" aria-label="Rewrite an article">
+        <span class="m-icon" aria-hidden="true">🔄</span>
+        <span class="m-label">Rewrite</span>
       </button>
-      <button class="mobile-nav-item" data-tab="tab-editor">
-        <span class="m-icon">📝</span>
+      <button class="mobile-nav-item" data-tab="tab-generator" aria-label="Custom generator">
+        <span class="m-icon" aria-hidden="true">✍️</span>
+        <span class="m-label">Generate</span>
+      </button>
+      <button class="mobile-nav-item" data-tab="tab-editor" aria-label="Article editor">
+        <span class="m-icon" aria-hidden="true">📝</span>
         <span class="m-label">Editor</span>
       </button>
-      <button class="mobile-nav-item" data-tab="tab-blogger">
-        <span class="m-icon">🌐</span>
-        <span class="m-label">Blogger</span>
+      <button class="mobile-nav-item" data-tab="tab-images" aria-label="Image search">
+        <span class="m-icon" aria-hidden="true">🖼️</span>
+        <span class="m-label">Images</span>
       </button>
-      <button class="mobile-nav-item" data-tab="tab-monetize">
-        <span class="m-icon">💰</span>
-        <span class="m-label">eBook</span>
+      <button class="mobile-nav-item" data-tab="tab-monetize" aria-label="Products and affiliates">
+        <span class="m-icon" aria-hidden="true">💰</span>
+        <span class="m-label">Vault</span>
+      </button>
+      <button class="mobile-nav-item" data-tab="tab-blogger" aria-label="Blogger and Google">
+        <span class="m-icon" aria-hidden="true">🌐</span>
+        <span class="m-label">Blogger</span>
       </button>
     </nav>
   </div>

@@ -1,20 +1,21 @@
 """FastAPI application for NextGen Tech Notes — Multi-Model AI Agentic Blog Hub."""
 from __future__ import annotations
-import html
+import hmac
 import json
 import os
 import re
+import time
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
-from fastapi import FastAPI, HTTPException, Request, Response
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI, HTTPException, Path as ApiPath, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from core import database as db
+from core.content_quality import content_fingerprint, run_quality_review
 from core.env_config import (
     get_google_client_id, get_google_client_secret, get_google_redirect_uri,
     get_groq_key, get_gemini_key, get_cohere_key, get_openai_key, get_anthropic_key,
@@ -42,13 +43,63 @@ app = FastAPI(
     version="2.2.0",
 )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+OWNER_SESSION_COOKIE = "aigen_owner_session"
+OWNER_SESSION_SECONDS = 12 * 60 * 60
+
+def _owner_auth_mode() -> str:
+    password = os.environ.get("APP_OWNER_PASSWORD", "")
+    secret = os.environ.get("APP_SESSION_SECRET", "")
+    deployed = bool(os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"))
+    if not password and not secret and not deployed:
+        return "local"
+    if len(password) >= 16 and len(secret.encode("utf-8")) >= 32:
+        return "configured"
+    return "misconfigured"
+
+def _owner_session_value(expiry: int) -> str:
+    secret = (
+        os.environ.get("APP_SESSION_SECRET", "") + "\0"
+        + os.environ.get("APP_OWNER_PASSWORD", "")
+    ).encode("utf-8")
+    signature = hmac.new(secret, f"owner-session:{expiry}".encode("ascii"), "sha256").hexdigest()
+    return f"{expiry}.{signature}"
+
+def _owner_session_is_valid(request: Request) -> bool:
+    value = request.cookies.get(OWNER_SESSION_COOKIE, "")
+    try:
+        expiry_text, supplied_signature = value.split(".", 1)
+        expiry = int(expiry_text)
+    except (ValueError, TypeError):
+        return False
+    now = int(time.time())
+    if expiry <= now or expiry > now + OWNER_SESSION_SECONDS + 30:
+        return False
+    expected_signature = _owner_session_value(expiry).split(".", 1)[1]
+    return hmac.compare_digest(supplied_signature, expected_signature)
+
+@app.middleware("http")
+async def protect_owner_api(request: Request, call_next):
+    path = request.url.path
+    public_paths = {
+        "/api/health",
+        "/api/auth/status",
+        "/api/auth/login",
+        "/api/auth/logout",
+        "/api/ebook/catalog",
+    }
+    if path.startswith("/api/") and path not in public_paths:
+        mode = _owner_auth_mode()
+        if mode == "misconfigured":
+            return JSONResponse(
+                status_code=503,
+                content={"detail": "Owner authentication is not configured for this deployment."},
+            )
+        if mode == "configured" and not _owner_session_is_valid(request):
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Owner login is required to access this endpoint."},
+            )
+    return await call_next(request)
 
 # Request Models
 class GenerateArticleRequest(BaseModel):
@@ -78,8 +129,9 @@ class ImageSearchRequest(BaseModel):
     provider: str
 
 class RenderArticleRequest(BaseModel):
-    markdown_text: str
-    title: str
+    markdown_text: str = Field(..., max_length=100000)
+    title: str = Field(..., max_length=500)
+    meta_description: Optional[str] = Field(default="", max_length=300)
     primary_keyword: Optional[str] = ""
     include_toc: Optional[bool] = True
     include_product: Optional[bool] = False
@@ -92,14 +144,31 @@ class RenderArticleRequest(BaseModel):
     section_image_url: Optional[str] = None
 
 class SaveArticleRequest(BaseModel):
-    topic: str
-    primary_keyword: Optional[str] = ""
-    title: str
-    markdown_body: str
-    rendered_html: Optional[str] = ""
+    topic: str = Field(..., max_length=500)
+    primary_keyword: Optional[str] = Field(default="", max_length=500)
+    title: str = Field(..., min_length=1, max_length=500)
+    meta_description: Optional[str] = Field(default=None, max_length=300)
+    markdown_body: str = Field(..., min_length=1, max_length=100000)
+    rendered_html: Optional[str] = Field(default="", max_length=500000)
     schema_json: Optional[Any] = None
     status: Optional[str] = "DRAFT"
     article_id: Optional[int] = None
+
+class QualitySourceRequest(BaseModel):
+    url: str = Field(..., min_length=8, max_length=2048)
+    excerpt: str = Field(..., min_length=1, max_length=10000)
+    title: Optional[str] = Field(default="", max_length=300)
+
+class QualityCheckRequest(BaseModel):
+    sources: list[QualitySourceRequest] = Field(default_factory=list, max_length=10)
+
+class ReviewDecisionRequest(BaseModel):
+    decision: Literal["APPROVED", "CHANGES_REQUESTED"]
+    notes: str = Field(default="", max_length=2000)
+    confirmed: bool = False
+
+class OwnerLoginRequest(BaseModel):
+    password: str = Field(..., min_length=1, max_length=1024)
 
 class CreateBloggerDraftRequest(BaseModel):
     blog_id: str
@@ -138,6 +207,51 @@ class AutopilotRequest(BaseModel):
     affiliate_id: Optional[int] = None
 
 # API Routes
+@app.get("/api/auth/status")
+def owner_auth_status(request: Request):
+    mode = _owner_auth_mode()
+    return {
+        "required": mode != "local",
+        "configured": mode == "configured" or mode == "local",
+        "authenticated": mode == "local" or (mode == "configured" and _owner_session_is_valid(request)),
+        "local_development": mode == "local",
+    }
+
+@app.post("/api/auth/login")
+def owner_login(req: OwnerLoginRequest, request: Request, response: Response):
+    mode = _owner_auth_mode()
+    if mode != "configured":
+        raise HTTPException(status_code=503, detail="Owner authentication is not configured.")
+    expected = os.environ.get("APP_OWNER_PASSWORD", "")
+    if not hmac.compare_digest(req.password.encode("utf-8"), expected.encode("utf-8")):
+        raise HTTPException(status_code=401, detail="Invalid owner password.")
+    expiry = int(time.time()) + OWNER_SESSION_SECONDS
+    response.set_cookie(
+        key=OWNER_SESSION_COOKIE,
+        value=_owner_session_value(expiry),
+        max_age=OWNER_SESSION_SECONDS,
+        httponly=True,
+        secure=bool(os.environ.get("VERCEL") or request.url.scheme == "https"
+                    or request.headers.get("x-forwarded-proto") == "https"),
+        samesite="lax",
+        path="/",
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return {"authenticated": True}
+
+@app.post("/api/auth/logout")
+def owner_logout(request: Request, response: Response):
+    response.delete_cookie(
+        key=OWNER_SESSION_COOKIE,
+        httponly=True,
+        secure=bool(os.environ.get("VERCEL") or request.url.scheme == "https"
+                    or request.headers.get("x-forwarded-proto") == "https"),
+        samesite="lax",
+        path="/",
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return {"authenticated": False}
+
 @app.get("/api/health")
 def health_check():
     return {
@@ -431,6 +545,7 @@ def render_post(req: RenderArticleRequest):
         req.markdown_text,
         req.title,
         req.primary_keyword or req.title,
+        description=req.meta_description or "",
         include_toc=req.include_toc if req.include_toc is not None else True,
         affiliate_html=affiliate_snippet,
         ebook_html=product_snippet,
@@ -477,6 +592,7 @@ def save_single_article(req: SaveArticleRequest):
             topic=req.topic,
             primary_keyword=req.primary_keyword or req.topic,
             title=req.title,
+            meta_description=req.meta_description,
             markdown_body=req.markdown_body,
             rendered_html=req.rendered_html or "",
             schema_json=req.schema_json or {},
@@ -484,8 +600,92 @@ def save_single_article(req: SaveArticleRequest):
             article_id=req.article_id,
         )
         return {"id": aid, "message": f"Article #{aid} saved successfully."}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail="Could not save the article.") from exc
+
+@app.post("/api/articles/{article_id}/quality-check")
+def run_article_quality_check(
+    req: QualityCheckRequest,
+    article_id: int = ApiPath(..., ge=1),
+):
+    article = db.get_article(article_id)
+    if not article:
+        raise HTTPException(status_code=404, detail="Article not found.")
+    if len(article["title"]) > 500 or len(article["markdown_body"]) > 100000:
+        raise HTTPException(status_code=413, detail="Article exceeds the quality review size limit.")
+    report = run_quality_review(
+        title=article["title"],
+        markdown=article["markdown_body"],
+        meta_description=article["meta_description"],
+        primary_keyword=article["primary_keyword"],
+        existing_articles=db.list_articles(limit=100),
+        source_material=[source.model_dump() for source in req.sources],
+        exclude_article_id=article_id,
+    )
+    try:
+        report_id = db.save_quality_report(
+            article_id,
+            article["title"],
+            article["markdown_body"],
+            report,
+            article["meta_description"],
+        )
+    except ValueError as exc:
+        status_code = 404 if not db.get_article(article_id) else 409
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+    stored_report = db.list_quality_reports(article_id, limit=1)[0]
+    return {
+        "id": report_id,
+        "article_id": article_id,
+        "content_hash": stored_report["content_hash"],
+        "created_at": stored_report["created_at"],
+        "report": report,
+    }
+
+@app.get("/api/articles/{article_id}/quality-reports")
+def get_article_quality_reports(article_id: int = ApiPath(..., ge=1), limit: int = 20):
+    article = db.get_article(article_id)
+    if not article:
+        raise HTTPException(status_code=404, detail="Article not found.")
+    current_hash = content_fingerprint(
+        article["title"],article["markdown_body"],article["meta_description"]
+    )
+    reports = db.list_quality_reports(article_id, limit=limit)
+    for report in reports:
+        report["is_current"] = report["content_hash"] == current_hash
+    return reports
+
+@app.get("/api/articles/{article_id}/revisions")
+def get_article_revisions(article_id: int = ApiPath(..., ge=1), limit: int = 20):
+    if not db.get_article(article_id):
+        raise HTTPException(status_code=404, detail="Article not found.")
+    return db.list_article_revisions(article_id, limit=limit)
+
+@app.get("/api/articles/{article_id}/review")
+def get_article_review(article_id: int = ApiPath(..., ge=1)):
+    status = db.get_article_review_status(article_id)
+    if status["status"] == "NOT_FOUND":
+        raise HTTPException(status_code=404, detail="Article not found.")
+    return status
+
+@app.post("/api/articles/{article_id}/review")
+def record_article_review(
+    req: ReviewDecisionRequest,
+    article_id: int = ApiPath(..., ge=1),
+):
+    if not db.get_article(article_id):
+        raise HTTPException(status_code=404, detail="Article not found.")
+    if req.decision == "APPROVED" and not req.confirmed:
+        raise HTTPException(
+            status_code=400,
+            detail="Explicitly confirm that you reviewed and approve this saved draft.",
+        )
+    try:
+        return db.save_review_decision(article_id, req.decision, req.notes)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 # Products Vault Routes (My Products / Instamojo Books)
 @app.get("/api/products")
@@ -555,41 +755,13 @@ def delete_single_affiliate(affiliate_id: int):
     return {"success": deleted}
 
 # Blogger & OAuth Routes
-SESSION_CREDENTIALS: dict[str, Any] = {}
-
 def resolve_current_credentials(request: Optional[Request] = None) -> tuple[Any, dict[str, Any]]:
-    token_override = None
-    user = {}
-    if request:
-        token_hdr = request.headers.get("x-google-token")
-        if token_hdr and token_hdr.strip() and token_hdr != "null" and token_hdr != "undefined":
-            token_override = token_hdr.strip()
-        elif "blogger_token" in request.cookies:
-            token_override = request.cookies.get("blogger_token")
-
-        user_hdr = request.headers.get("x-google-user")
-        if user_hdr and user_hdr.strip() and user_hdr != "null":
-            try:
-                user = json.loads(user_hdr)
-            except Exception:
-                pass
-        elif "blogger_user" in request.cookies:
-            try:
-                user = json.loads(request.cookies.get("blogger_user", "{}"))
-            except Exception:
-                pass
-
-    dummy = {"google_api_token": SESSION_CREDENTIALS.get("token")}
-    creds = get_credentials(dummy, token_override=token_override)
-    if not user:
-        user_str = db.get_system_credential("google_user")
-        if user_str:
-            try:
-                user = json.loads(user_str)
-            except Exception:
-                user = {}
-    if not user:
-        user = SESSION_CREDENTIALS.get("user", {})
+    creds = get_credentials({})
+    user_str = db.get_system_credential("google_user")
+    try:
+        user = json.loads(user_str) if user_str else {}
+    except (TypeError, json.JSONDecodeError):
+        user = {}
     return creds, user
 
 def get_canonical_callback_url(request: Request, passed_redirect: str = "") -> str:
@@ -615,7 +787,6 @@ def get_oauth_url(request: Request, redirect_uri: str = ""):
 
     dummy_session: dict[str, Any] = {}
     auth_url = start_oauth(client_id, client_secret, dummy_session, redirect_uri=target_redirect)
-    SESSION_CREDENTIALS["target_redirect"] = target_redirect
     return {
         "url": auth_url,
         "redirect_uri": target_redirect,
@@ -626,58 +797,22 @@ def get_oauth_url(request: Request, redirect_uri: str = ""):
 def handle_oauth_callback(request: Request, code: str = "", state: str = ""):
     client_id = get_google_client_id()
     client_secret = get_google_client_secret()
-    target_redirect = SESSION_CREDENTIALS.get("target_redirect") or get_canonical_callback_url(request)
+    target_redirect = get_canonical_callback_url(request)
     if not client_id or not client_secret:
         return HTMLResponse("<h3>Missing Google OAuth credentials in .env.</h3>", status_code=400)
     try:
         dummy_session: dict[str, Any] = {}
         creds = finish_oauth(code, state, dummy_session, client_id=client_id, client_secret=client_secret, redirect_uri=target_redirect)
-        token_data = dummy_session.get("google_api_token")
-        user_data = dummy_session.get("google_user", {})
-        SESSION_CREDENTIALS["creds"] = creds
-        SESSION_CREDENTIALS["token"] = token_data
-        SESSION_CREDENTIALS["user"] = user_data
-
-        token_json_str = json.dumps(token_data)
-        user_json_str = json.dumps(user_data)
-
-        html_content = f"""<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>Authenticating Blogger...</title>
-  <style>
-    body {{ background: #0b0f19; color: #fff; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }}
-    .card {{ text-align: center; background: #111827; padding: 36px 48px; border-radius: 16px; border: 1px solid #1f2937; box-shadow: 0 15px 35px rgba(0,0,0,0.6); }}
-    .spinner {{ width: 40px; height: 40px; border: 3px solid #374151; border-top-color: #6366f1; border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 16px; }}
-    @keyframes spin {{ to {{ transform: rotate(360deg); }} }}
-  </style>
-</head>
-<body>
-  <div class="card">
-    <div class="spinner"></div>
-    <h3 style="margin: 0 0 8px 0;">Google Blogger Connected!</h3>
-    <p style="color: #94a3b8; font-size: 14px; margin: 0;">Synchronizing serverless session...</p>
-  </div>
-  <script>
-    try {{
-      localStorage.setItem('google_api_token', {json.dumps(token_json_str)});
-      localStorage.setItem('google_user', {json.dumps(user_json_str)});
-    }} catch(e) {{
-      console.error(e);
-    }}
-    setTimeout(function() {{
-      window.location.href = '/?oauth_success=1';
-    }}, 400);
-  </script>
-</body>
-</html>"""
-        response = HTMLResponse(content=html_content, status_code=200)
-        response.set_cookie(key="blogger_token", value=token_json_str, max_age=30*86400, httponly=False, samesite="lax")
-        response.set_cookie(key="blogger_user", value=user_json_str, max_age=30*86400, httponly=False, samesite="lax")
+        response = RedirectResponse(url="/?oauth_success=1", status_code=303)
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Referrer-Policy"] = "no-referrer"
         return response
     except Exception as exc:
-        return HTMLResponse(f"<h3>OAuth error: {html.escape(str(exc))}</h3><p>Redirect URI used: <code>{target_redirect}</code></p>", status_code=500)
+        return HTMLResponse(
+            "<h3>Google connection failed.</h3><p>Check the server configuration and restart the connection.</p>",
+            status_code=500,
+            headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
+        )
 
 @app.get("/api/oauth/status")
 def oauth_status(request: Request):
@@ -742,6 +877,7 @@ def upload_blogger_draft(req: CreateBloggerDraftRequest, request: Request):
             topic=article["topic"],
             primary_keyword=article["primary_keyword"],
             title=req.title,
+            meta_description=article["meta_description"],
             markdown_body=article["markdown_body"],
             rendered_html=req.rendered_html,
             schema_json=article.get("schema_json", "{}"),
@@ -811,8 +947,8 @@ def sync_blogger_navigation(req: SyncNavigationRequest, request: Request):
     }
 
 @app.get("/api/search-console")
-def get_search_console(days: int = 28):
-    creds = SESSION_CREDENTIALS.get("creds")
+def get_search_console(request: Request, days: int = 28):
+    creds, _ = resolve_current_credentials(request)
     if not creds:
         raise HTTPException(status_code=401, detail="Google account not connected.")
     try:

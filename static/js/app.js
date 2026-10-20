@@ -8,6 +8,7 @@ const state = {
   currentArticle: {
     id: null,
     title: '',
+    metaDescription: '',
     topic: '',
     keyword: '',
     markdown: '',
@@ -24,6 +25,7 @@ const state = {
   activeBlogId: '',
   products: [],
   affiliates: [],
+  qualityReviewFresh: false,
 };
 
 const el = {
@@ -104,6 +106,7 @@ const el = {
 
   // Editor
   editorTitle: document.getElementById('editor-title'),
+  editorMetaDescription: document.getElementById('editor-meta-description'),
   markdownEditor: document.getElementById('markdown-editor'),
   wordCountBadge: document.getElementById('word-count-badge'),
   toggleToc: document.getElementById('toggle-toc'),
@@ -118,7 +121,25 @@ const el = {
   rawHtmlViewer: document.getElementById('raw-html-viewer'),
   rawSchemaViewer: document.getElementById('raw-schema-viewer'),
   qualityWarningsBanner: document.getElementById('quality-warnings-banner'),
+  qualitySourceNotes: document.getElementById('quality-source-notes'),
+  qualityReviewNotes: document.getElementById('quality-review-notes'),
+  qualityReviewStatus: document.getElementById('quality-review-status'),
+  qualityReviewCounts: document.getElementById('quality-review-counts'),
+  qualityReviewFindings: document.getElementById('quality-review-findings'),
+  qualityReportHistory: document.getElementById('quality-report-history'),
+  qualityRevisionHistory: document.getElementById('quality-revision-history'),
+  btnQualityCheck: document.getElementById('btn-quality-check'),
+  btnQualityApprove: document.getElementById('btn-quality-approve'),
+  btnQualityRequestChanges: document.getElementById('btn-quality-request-changes'),
+  btnQualityHistory: document.getElementById('btn-quality-history'),
+  btnQualityRevisions: document.getElementById('btn-quality-revisions'),
   viewBtns: document.querySelectorAll('.view-btn'),
+  ownerLoginGate: document.getElementById('owner-login-gate'),
+  ownerLoginForm: document.getElementById('owner-login-form'),
+  ownerLoginPassword: document.getElementById('owner-login-password'),
+  ownerLoginMessage: document.getElementById('owner-login-message'),
+  ownerLoginSubmit: document.getElementById('owner-login-submit'),
+  ownerLogoutButton: document.getElementById('owner-logout-btn'),
 
   // Products & Affiliates
   productForm: document.getElementById('product-form'),
@@ -133,6 +154,19 @@ const el = {
   btnSyncNavigation: document.getElementById('btn-sync-navigation'),
   bloggerPostsContainer: document.getElementById('blogger-posts-container'),
 };
+
+try {
+  ['google_api_token', 'google_user'].forEach((key) => localStorage.removeItem(key));
+} catch (err) {
+  console.warn('Could not clear legacy Google token storage.', err);
+}
+try {
+  ['blogger_token', 'blogger_user'].forEach((key) => {
+    document.cookie = `${key}=; Max-Age=0; path=/; SameSite=Lax`;
+  });
+} catch (err) {
+  console.warn('Could not clear legacy Google token cookies.', err);
+}
 
 function showToast(message, type = 'info') {
   if (!el.toastContainer) return;
@@ -156,14 +190,27 @@ function escapeHtml(value) {
   })[char]);
 }
 
-// Persistent Auth Headers for Serverless Invocations
+function safeHttpsUrl(value) {
+  try {
+    const url = new URL(String(value));
+    return url.protocol === 'https:' ? url.href : '';
+  } catch {
+    return '';
+  }
+}
+
+function safeReviewSourceUrl(value) {
+  try {
+    const url = new URL(String(value), window.location.origin);
+    return ['https:', 'http:'].includes(url.protocol) && !url.username && !url.password ? url.href : '';
+  } catch {
+    return '';
+  }
+}
+
+// Same-origin session cookies authorize requests; Google tokens never enter the browser.
 function getAuthHeaders(extraHeaders = {}) {
-  const headers = { 'Content-Type': 'application/json', ...extraHeaders };
-  const token = localStorage.getItem('google_api_token');
-  const user = localStorage.getItem('google_user');
-  if (token) headers['X-Google-Token'] = token;
-  if (user) headers['X-Google-User'] = user;
-  return headers;
+  return { 'Content-Type': 'application/json', ...extraHeaders };
 }
 
 const PROVIDER_MODELS = {
@@ -419,6 +466,7 @@ if (el.btnRunRewrite) {
       state.currentArticle = {
         id: null,
         title: data.title,
+        metaDescription: '',
         topic: title,
         keyword: title,
         markdown: data.markdown,
@@ -496,6 +544,7 @@ if (el.genForm) {
       state.currentArticle = {
         id: null,
         title: data.title,
+        metaDescription: '',
         topic,
         keyword: keyword || topic,
         markdown: data.markdown,
@@ -538,6 +587,7 @@ function loadArticleIntoEditor(article) {
     ...state.currentArticle,
     id: article.id ?? state.currentArticle.id,
     title: article.title || '',
+    metaDescription: article.meta_description || article.metaDescription || '',
     topic: article.topic || state.currentArticle.topic,
     keyword: article.keyword || article.primary_keyword || state.currentArticle.keyword,
     markdown: article.markdown || article.markdown_body || '',
@@ -545,9 +595,219 @@ function loadArticleIntoEditor(article) {
     bloggerBlogId: article.bloggerBlogId || article.blogger_blog_id || '',
   };
   el.editorTitle.value = article.title || '';
+  el.editorMetaDescription.value = state.currentArticle.metaDescription;
   el.markdownEditor.value = state.currentArticle.markdown;
+  resetQualityReview('Draft changed or loaded; run checks before recording a review.');
   updateLocalDeleteButton();
   renderPreview();
+}
+
+function resetQualityReview(message = 'Draft changed — run checks again.') {
+  state.qualityReviewFresh = false;
+  if (el.qualityReviewStatus) {
+    el.qualityReviewStatus.textContent = message;
+    el.qualityReviewStatus.className = 'badge yellow';
+  }
+  if (el.btnQualityApprove) el.btnQualityApprove.disabled = true;
+  if (el.btnQualityRequestChanges) el.btnQualityRequestChanges.disabled = true;
+}
+
+function renderQualityReport(report) {
+  const counts = report.finding_counts || {};
+  const total = Object.values(counts).reduce((sum, value) => sum + Number(value || 0), 0);
+  el.qualityReviewCounts.textContent = `${total} review finding${total === 1 ? '' : 's'} · High ${counts.high || 0} · Medium ${counts.medium || 0} · Low ${counts.low || 0} · Info ${counts.info || 0}. No overall score.`;
+  if (!report.findings?.length) {
+    el.qualityReviewFindings.innerHTML = '<p class="text-muted">No heuristic findings this pass. This does not establish originality, factual accuracy, citation validity, or publication readiness.</p>';
+  } else {
+    el.qualityReviewFindings.innerHTML = report.findings.map((finding) => {
+      const sourceUrl = safeReviewSourceUrl(finding.source_url || '');
+      const sourceLink = sourceUrl
+        ? `<p><a href="${escapeHtml(sourceUrl)}" target="_blank" rel="noopener noreferrer">Inspect comparison source</a></p>`
+        : '';
+      const excerpt = finding.excerpt
+        ? `<blockquote>${escapeHtml(finding.excerpt)}</blockquote>`
+        : '';
+      return `<article class="quality-finding" data-severity="${escapeHtml(finding.severity)}">
+        <h3>${escapeHtml(finding.severity.toUpperCase())} · ${escapeHtml(finding.category)}: ${escapeHtml(finding.title)}</h3>
+        ${excerpt}
+        <p><strong>Evidence:</strong> ${escapeHtml(finding.evidence)}</p>
+        <p><strong>Recommended action:</strong> ${escapeHtml(finding.recommendation)}</p>
+        ${sourceLink}
+      </article>`;
+    }).join('');
+  }
+  const limitations = (report.limitations || []).map((item) => escapeHtml(item)).join(' ');
+  if (limitations) {
+    el.qualityReviewFindings.insertAdjacentHTML('beforeend', `<p class="section-desc">${limitations}</p>`);
+  }
+  const sources = report.source_material_reviewed || [];
+  if (sources.length) {
+    const sourceItems = sources.map((source) => {
+      const safeUrl = safeReviewSourceUrl(source.url || '');
+      const link = safeUrl
+        ? `<a href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(source.title || source.url)}</a>`
+        : escapeHtml(source.title || 'Provided excerpt');
+      return `<li><strong>${link}</strong><p>${escapeHtml(source.excerpt)}</p></li>`;
+    }).join('');
+    el.qualityReviewFindings.insertAdjacentHTML(
+      'beforeend',
+      `<div class="quality-finding"><h3>Source excerpts supplied for this review</h3><ul>${sourceItems}</ul></div>`,
+    );
+  }
+}
+
+function parseQualitySources() {
+  const raw = el.qualitySourceNotes.value.trim();
+  if (!raw) return [];
+  return raw.split(/\r?\n/).filter(Boolean).map((line, index) => {
+    const separator = line.indexOf('|');
+    if (separator < 1 || !line.slice(separator + 1).trim()) {
+      throw new Error(`Source line ${index + 1} must use: URL | relevant excerpt.`);
+    }
+    return {
+      url: line.slice(0, separator).trim(),
+      excerpt: line.slice(separator + 1).trim(),
+    };
+  });
+}
+
+async function runArticleQualityReview() {
+  if (!state.currentArticle.id) await saveCurrentArticle();
+  const sources = parseQualitySources();
+  const response = await fetch(`/api/articles/${state.currentArticle.id}/quality-check`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ sources }),
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.detail || 'Quality review failed.');
+  renderQualityReport(data.report);
+  state.qualityReviewFresh = true;
+  el.qualityReviewStatus.textContent = 'Fresh review · not an automatic publication decision';
+  el.qualityReviewStatus.className = 'badge green';
+  el.btnQualityApprove.disabled = false;
+  el.btnQualityRequestChanges.disabled = false;
+}
+
+if (el.btnQualityCheck) {
+  el.btnQualityCheck.addEventListener('click', async () => {
+    el.btnQualityCheck.disabled = true;
+    el.qualityReviewStatus.textContent = 'Saving draft and checking…';
+    try {
+      await saveCurrentArticle();
+      await runArticleQualityReview();
+      showToast('Quality report saved. Similarity flags require human interpretation.', 'success');
+    } catch (err) {
+      resetQualityReview(err.message);
+      showToast(err.message, 'error');
+    } finally {
+      el.btnQualityCheck.disabled = false;
+    }
+  });
+}
+
+async function recordQualityDecision(decision) {
+  if (!state.currentArticle.id || !state.qualityReviewFresh) {
+    throw new Error('Save the current draft and run a fresh quality review first.');
+  }
+  if (decision === 'APPROVED' && !window.confirm('Confirm that you reviewed this draft and approve it for the next human-controlled workflow. This does not publish it.')) return;
+  const response = await fetch(`/api/articles/${state.currentArticle.id}/review`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({
+      decision,
+      notes: el.qualityReviewNotes.value.trim(),
+      confirmed: decision === 'APPROVED',
+    }),
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.detail || 'Could not save the review decision.');
+  el.qualityReviewStatus.textContent = decision === 'APPROVED' ? 'Human approved · not published' : 'Changes requested';
+  el.qualityReviewStatus.className = decision === 'APPROVED' ? 'badge green' : 'badge yellow';
+  showToast(decision === 'APPROVED' ? 'Review decision saved; no post was published.' : 'Changes-requested decision saved.', 'success');
+}
+
+if (el.btnQualityApprove) {
+  el.btnQualityApprove.addEventListener('click', () => {
+    recordQualityDecision('APPROVED').catch((err) => showToast(err.message, 'error'));
+  });
+}
+if (el.btnQualityRequestChanges) {
+  el.btnQualityRequestChanges.addEventListener('click', () => {
+    recordQualityDecision('CHANGES_REQUESTED').catch((err) => showToast(err.message, 'error'));
+  });
+}
+
+if (el.btnQualityHistory) {
+  el.btnQualityHistory.addEventListener('click', async () => {
+    const articleId = state.currentArticle.id;
+    if (!articleId) {
+      showToast('Save the draft before loading quality report history.', 'error');
+      return;
+    }
+    try {
+      const response = await fetch(`/api/articles/${articleId}/quality-reports`, { headers: getAuthHeaders() });
+      const reports = await response.json();
+      if (!response.ok) throw new Error(reports.detail || 'Could not load saved quality reports.');
+      el.qualityReportHistory.innerHTML = reports.map((item, index) => `
+        <div class="quality-revision">
+          <span>Report ${escapeHtml(item.id)} · ${escapeHtml(item.created_at)} · ${item.is_current ? 'Current content' : 'Stale content'}</span>
+          <button class="btn btn-secondary btn-sm" type="button" data-quality-report="${index}">View report</button>
+        </div>`).join('') || '<p class="text-muted">No saved quality reports.</p>';
+      el.qualityReportHistory.classList.remove('hidden');
+      el.qualityReportHistory.querySelectorAll('[data-quality-report]').forEach((button) => {
+        button.addEventListener('click', () => {
+          const item = reports[Number(button.dataset.qualityReport)];
+          renderQualityReport(item.report);
+          state.qualityReviewFresh = Boolean(item.is_current);
+          el.btnQualityApprove.disabled = !state.qualityReviewFresh;
+          el.btnQualityRequestChanges.disabled = !state.qualityReviewFresh;
+          el.qualityReviewStatus.textContent = item.is_current
+            ? 'Saved report · current content'
+            : 'Saved report · draft has since changed; recheck required';
+          el.qualityReviewStatus.className = item.is_current ? 'badge green' : 'badge yellow';
+        });
+      });
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  });
+}
+
+if (el.btnQualityRevisions) {
+  el.btnQualityRevisions.addEventListener('click', async () => {
+    const articleId = state.currentArticle.id;
+    if (!articleId) {
+      showToast('Save the draft before loading revision history.', 'error');
+      return;
+    }
+    try {
+      const response = await fetch(`/api/articles/${articleId}/revisions`, { headers: getAuthHeaders() });
+      const revisions = await response.json();
+      if (!response.ok) throw new Error(revisions.detail || 'Could not load revision history.');
+      el.qualityRevisionHistory.innerHTML = revisions.map((revision) => `
+        <div class="quality-revision">
+          <span>Revision ${revision.revision_number} · ${escapeHtml(revision.title)} · ${escapeHtml(revision.created_at)}</span>
+          <button class="btn btn-secondary btn-sm" type="button" data-revision="${revision.revision_number}">Restore to editor</button>
+        </div>`).join('') || '<p class="text-muted">No saved revisions.</p>';
+      el.qualityRevisionHistory.classList.remove('hidden');
+      el.qualityRevisionHistory.querySelectorAll('[data-revision]').forEach((button, index) => {
+        button.addEventListener('click', () => {
+          if ((el.editorTitle.value || el.markdownEditor.value) && !window.confirm('Load this saved revision into the editor? Unsaved changes will be replaced.')) return;
+          const revision = revisions[index];
+          loadArticleIntoEditor({
+            id: articleId,
+            title: revision.title,
+            meta_description: revision.meta_description,
+            markdown_body: revision.markdown_body,
+          });
+          showToast(`Revision ${revision.revision_number} loaded. Save it as a new revision after editing.`, 'info');
+        });
+      });
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  });
 }
 
 function updateLocalDeleteButton() {
@@ -575,6 +835,7 @@ async function renderPreview() {
       body: JSON.stringify({
         markdown_text: markdown,
         title: title || 'Draft',
+        meta_description: el.editorMetaDescription.value.trim(),
         include_toc: el.toggleToc.checked,
         include_product: el.toggleEbook.checked,
         featured_image_url: state.currentArticle.featuredImageUrl || null,
@@ -605,7 +866,12 @@ async function renderPreview() {
 }
 
 if (el.btnRefreshPreview) el.btnRefreshPreview.addEventListener('click', renderPreview);
-if (el.markdownEditor) el.markdownEditor.addEventListener('input', debounce(renderPreview, 600));
+if (el.markdownEditor) {
+  el.markdownEditor.addEventListener('input', debounce(renderPreview, 600));
+  el.markdownEditor.addEventListener('input', () => resetQualityReview());
+}
+if (el.editorTitle) el.editorTitle.addEventListener('input', () => resetQualityReview());
+if (el.editorMetaDescription) el.editorMetaDescription.addEventListener('input', () => resetQualityReview());
 if (el.toggleToc) el.toggleToc.addEventListener('change', renderPreview);
 if (el.toggleEbook) el.toggleEbook.addEventListener('change', renderPreview);
 
@@ -621,6 +887,7 @@ async function saveCurrentArticle() {
       topic: state.currentArticle.topic || title,
       primary_keyword: state.currentArticle.keyword || title,
       title,
+      meta_description: el.editorMetaDescription.value.trim(),
       markdown_body: markdown,
       rendered_html: state.currentArticle.renderedHtml,
       schema_json: state.currentArticle.schema,
@@ -908,9 +1175,9 @@ function renderProductsTable() {
     html += `
       <div style="display:flex; justify-content:space-between; align-items:center; background:#111827; padding:10px 14px; border-radius:8px; border:1px solid #1f2937;">
         <div>
-          <strong style="color:#ffffff; font-size:14px;">${p.title}</strong>
-          <span style="color:#34d399; font-size:13px; margin-left:8px;">${p.price || ''}</span>
-          <p style="margin:2px 0 0 0; color:#94a3b8; font-size:12px;">${p.url}</p>
+          <strong style="color:#ffffff; font-size:14px;">${escapeHtml(p.title)}</strong>
+          <span style="color:#34d399; font-size:13px; margin-left:8px;">${escapeHtml(p.price || '')}</span>
+          <p style="margin:2px 0 0 0; color:#94a3b8; font-size:12px;">${escapeHtml(p.url)}</p>
         </div>
         <button class="btn btn-secondary btn-sm" onclick="deleteProductItem(${p.id})">Delete</button>
       </div>
@@ -922,14 +1189,18 @@ function renderProductsTable() {
   // Render live preview for the first product
   if (state.products.length > 0 && el.ebookLivePreview) {
     const prod = state.products[0];
+    const productUrl = safeHttpsUrl(prod.url);
+    const checkoutAction = productUrl
+      ? `<a href="${escapeHtml(productUrl)}" target="_blank" rel="noopener noreferrer" class="btn btn-primary btn-sm">Get on Instamojo &rarr;</a>`
+      : '<span class="btn btn-primary btn-sm" aria-disabled="true">Checkout URL unavailable</span>';
     el.ebookLivePreview.innerHTML = `
       <div style="padding:18px; border:2px solid #4f46e5; border-radius:12px; background:linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%); color:#ffffff;">
-        <span style="display:inline-block; padding:3px 10px; font-size:11px; font-weight:700; background:#fbbf24; color:#000; border-radius:12px; margin-bottom:8px;">${prod.badge || '★ Recommended Guide'}</span>
-        <h4 style="margin:0 0 6px 0; font-size:17px; color:#fff;">${prod.title}</h4>
-        <p style="margin:0 0 10px 0; font-size:13px; color:#cbd5e1;">${prod.description || 'Fast-track developer guide.'}</p>
+        <span style="display:inline-block; padding:3px 10px; font-size:11px; font-weight:700; background:#fbbf24; color:#000; border-radius:12px; margin-bottom:8px;">${escapeHtml(prod.badge || '★ Recommended Guide')}</span>
+        <h4 style="margin:0 0 6px 0; font-size:17px; color:#fff;">${escapeHtml(prod.title)}</h4>
+        <p style="margin:0 0 10px 0; font-size:13px; color:#cbd5e1;">${escapeHtml(prod.description || 'Fast-track developer guide.')}</p>
         <div style="display:flex; align-items:center; justify-content:space-between;">
-          <span style="font-size:18px; font-weight:800; color:#34d399;">${prod.price || 'Special'}</span>
-          <a href="${prod.url}" target="_blank" class="btn btn-primary btn-sm">Get on Instamojo &rarr;</a>
+          <span style="font-size:18px; font-weight:800; color:#34d399;">${escapeHtml(prod.price || 'Special')}</span>
+          ${checkoutAction}
         </div>
       </div>
     `;
@@ -1011,8 +1282,8 @@ function renderAffiliatesTable() {
     html += `
       <div style="display:flex; justify-content:space-between; align-items:center; background:#111827; padding:10px 14px; border-radius:8px; border:1px solid #1f2937;">
         <div>
-          <strong style="color:#ffffff; font-size:14px;">${a.product_name}</strong>
-          <p style="margin:2px 0 0 0; color:#94a3b8; font-size:12px;">${a.tracking_url}</p>
+          <strong style="color:#ffffff; font-size:14px;">${escapeHtml(a.product_name)}</strong>
+          <p style="margin:2px 0 0 0; color:#94a3b8; font-size:12px;">${escapeHtml(a.tracking_url)}</p>
         </div>
         <button class="btn btn-secondary btn-sm" onclick="deleteAffiliateItem(${a.id})">Delete</button>
       </div>
@@ -1076,19 +1347,6 @@ window.deleteAffiliateItem = async function(id) {
 
 // Google OAuth Setup & Error 400 Diagnosis
 async function checkOAuthStatus() {
-  // Check local token first
-  const localToken = localStorage.getItem('google_api_token');
-  const localUser = localStorage.getItem('google_user');
-  if (localToken && localUser) {
-    try {
-      const user = JSON.parse(localUser);
-      el.googleIndicator.className = 'indicator green';
-      el.googleStatusText.textContent = `Blogger: ${user.email || 'Online'}`;
-      el.connectGoogleBtn.textContent = 'Connected ✓';
-      state.googleConnected = true;
-    } catch (e) {}
-  }
-
   try {
     const res = await fetch('/api/oauth/status', { headers: getAuthHeaders() });
     const data = await res.json();
@@ -1103,7 +1361,7 @@ async function checkOAuthStatus() {
       el.googleStatusText.textContent = `Blogger: ${data.user.email || 'Online'}`;
       el.connectGoogleBtn.textContent = 'Connected ✓';
       loadBloggerBlogs();
-    } else if (!localToken) {
+    } else {
       el.googleIndicator.className = 'indicator red';
       el.googleStatusText.textContent = 'Blogger: Offline';
     }
@@ -1178,22 +1436,25 @@ async function loadBloggerPosts(blogId) {
         opt.dataset.title = p.title;
         el.rewriteBloggerSelect.appendChild(opt);
 
-        tableHtml += `<tr style="border-bottom:1px solid var(--border-subtle);"><td style="padding:8px 6px;">${p.title}</td><td style="padding:8px 6px; text-align:right;"><button class="btn btn-secondary btn-sm" onclick="selectPostForRewrite('${p.id}')">Rewrite</button></td></tr>`;
+        tableHtml += `<tr style="border-bottom:1px solid var(--border-subtle);"><td style="padding:8px 6px;">${escapeHtml(p.title)}</td><td style="padding:8px 6px; text-align:right;"><button class="btn btn-secondary btn-sm" data-post-id="${escapeHtml(p.id)}">Rewrite</button></td></tr>`;
       });
       tableHtml += '</tbody></table>';
       el.bloggerPostsContainer.innerHTML = tableHtml;
+      el.bloggerPostsContainer.querySelectorAll('[data-post-id]').forEach(button => {
+        button.addEventListener('click', () => selectPostForRewrite(button.dataset.postId));
+      });
     } else {
       el.bloggerPostsContainer.innerHTML = '<p class="text-muted">No posts found in this blog.</p>';
     }
   } catch (err) {
-    el.bloggerPostsContainer.innerHTML = `<p style="color:var(--color-danger);">${err.message}</p>`;
+    el.bloggerPostsContainer.innerHTML = `<p style="color:var(--color-danger);">${escapeHtml(err.message)}</p>`;
   }
 }
 
 // WIRED: "Load Posts" button click listener
 if (el.btnFetchBloggerPosts) {
   el.btnFetchBloggerPosts.addEventListener('click', async () => {
-    if (!state.googleConnected && !localStorage.getItem('google_api_token')) {
+    if (!state.googleConnected) {
       showToast('Please connect your Google Blogger account first.', 'error');
       switchTab('tab-blogger');
       return;
@@ -1212,7 +1473,7 @@ if (el.btnRefreshBlogs) {
 }
 
 window.selectPostForRewrite = function(postId) {
-  const opt = el.rewriteBloggerSelect.querySelector(`option[value="${postId}"]`);
+  const opt = Array.from(el.rewriteBloggerSelect.options).find(option => option.value === String(postId));
   if (opt) {
     el.rewriteTitle.value = opt.dataset.title;
     el.rewriteContent.value = opt.dataset.content;
@@ -1227,6 +1488,95 @@ if (el.rewriteBloggerSelect) {
     if (opt && opt.value) {
       el.rewriteTitle.value = opt.dataset.title;
       el.rewriteContent.value = opt.dataset.content;
+    }
+  });
+}
+
+let applicationStarted = false;
+
+function setOwnerWorkspaceVisible(visible, statusMessage = '') {
+  document.getElementById('app-wrapper').classList.toggle('hidden', !visible);
+  document.getElementById('app-wrapper').setAttribute('aria-hidden', String(!visible));
+  el.ownerLoginGate.classList.toggle('hidden', visible);
+  el.ownerLogoutButton.classList.toggle('hidden', !visible || !window.ownerAuthRequired);
+  if (statusMessage) el.ownerLoginMessage.textContent = statusMessage;
+  if (!visible) el.ownerLoginPassword.focus();
+}
+
+async function initializeOwnerAccess() {
+  try {
+    const response = await fetch('/api/auth/status', { cache: 'no-store' });
+    const access = await response.json();
+    if (!response.ok) throw new Error(access.detail || 'Could not check owner access.');
+    window.ownerAuthRequired = Boolean(access.required);
+    if (!access.configured) {
+      setOwnerWorkspaceVisible(false, 'Owner login is not configured. Set APP_OWNER_PASSWORD and an APP_SESSION_SECRET of at least 32 characters in the server environment.');
+      el.ownerLoginSubmit.disabled = true;
+      return false;
+    }
+    if (access.required && !access.authenticated) {
+      setOwnerWorkspaceVisible(false, 'Sign in to access this private content workspace.');
+      el.ownerLoginSubmit.disabled = false;
+      return false;
+    }
+    setOwnerWorkspaceVisible(true);
+    return true;
+  } catch (err) {
+    setOwnerWorkspaceVisible(false, 'The application could not verify access. Check the server and try again.');
+    el.ownerLoginSubmit.disabled = true;
+    return false;
+  }
+}
+
+async function startApplication() {
+  if (applicationStarted || !await initializeOwnerAccess()) return;
+  applicationStarted = true;
+  loadProviderStatus();
+  checkOAuthStatus();
+  loadProducts();
+  loadAffiliates();
+
+  const urlParams = new URLSearchParams(window.location.search);
+  if (urlParams.get('oauth_success')) {
+    showToast('Google Blogger connected successfully!', 'success');
+    window.history.replaceState({}, document.title, window.location.pathname);
+    setTimeout(checkOAuthStatus, 500);
+  }
+}
+
+if (el.ownerLoginForm) {
+  el.ownerLoginForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    el.ownerLoginSubmit.disabled = true;
+    el.ownerLoginMessage.textContent = 'Signing in…';
+    try {
+      const response = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: el.ownerLoginPassword.value }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || 'Sign-in failed.');
+      el.ownerLoginPassword.value = '';
+      await startApplication();
+    } catch (err) {
+      el.ownerLoginMessage.textContent = err.message;
+    } finally {
+      el.ownerLoginSubmit.disabled = false;
+    }
+  });
+}
+
+if (el.ownerLogoutButton) {
+  el.ownerLogoutButton.addEventListener('click', async () => {
+    try {
+      const response = await fetch('/api/auth/logout', { method: 'POST' });
+      if (!response.ok) throw new Error('Could not end the owner session.');
+      applicationStarted = false;
+      await initializeOwnerAccess();
+      el.ownerLoginMessage.textContent = 'You have signed out.';
+    } catch (err) {
+      showToast(err.message, 'error');
     }
   });
 }
@@ -1257,15 +1607,5 @@ function debounce(func, wait) {
 
 // Startup Initialization
 window.addEventListener('DOMContentLoaded', () => {
-  loadProviderStatus();
-  checkOAuthStatus();
-  loadProducts();
-  loadAffiliates();
-
-  const urlParams = new URLSearchParams(window.location.search);
-  if (urlParams.get('oauth_success')) {
-    showToast('Google Blogger connected successfully!', 'success');
-    window.history.replaceState({}, document.title, window.location.pathname);
-    setTimeout(checkOAuthStatus, 500);
-  }
+  startApplication();
 });

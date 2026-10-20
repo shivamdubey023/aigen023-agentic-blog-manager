@@ -11,3 +11,12 @@ content_ops.db
 content_ops.db-shm
 content_ops.db-wal
 .toml
+# Local credentials and environment files
+.env
+.env.*
+!.env.example
+.env.txt
+
+# Google Cloud service account credentials
+service-account*.json
+*service-account*.json

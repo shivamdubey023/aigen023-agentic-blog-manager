@@ -6,16 +6,23 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
+from core.content_quality import content_fingerprint
+
 APP_ROOT = Path(__file__).resolve().parents[1]
 
-def get_db_path() -> Path:
+def _default_db_path() -> Path:
     if "CONTENT_OPS_DB" in os.environ:
         return Path(os.environ["CONTENT_OPS_DB"])
     if os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
         return Path("/tmp/content_ops.db")
     return APP_ROOT / "content_ops.db"
 
-DB_PATH = get_db_path()
+DB_PATH = _default_db_path()
+
+def get_db_path() -> Path:
+    if "CONTENT_OPS_DB" in os.environ:
+        return Path(os.environ["CONTENT_OPS_DB"])
+    return DB_PATH
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -49,6 +56,7 @@ def init_db() -> None:
         CREATE TABLE IF NOT EXISTS articles (
           id INTEGER PRIMARY KEY AUTOINCREMENT, topic TEXT NOT NULL DEFAULT '',
           primary_keyword TEXT NOT NULL DEFAULT '', title TEXT NOT NULL DEFAULT '',
+          meta_description TEXT NOT NULL DEFAULT '',
           markdown_body TEXT NOT NULL DEFAULT '', rendered_html TEXT NOT NULL DEFAULT '',
           schema_json TEXT NOT NULL DEFAULT '{}',
           status TEXT NOT NULL DEFAULT 'DRAFT' CHECK(status IN ('QUEUED','DRAFT','PAUSED','PUBLISHED')),
@@ -57,6 +65,33 @@ def init_db() -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_articles_status ON articles(status);
         CREATE INDEX IF NOT EXISTS idx_articles_updated ON articles(updated_at DESC);
+        CREATE TABLE IF NOT EXISTS article_revisions (
+          id INTEGER PRIMARY KEY AUTOINCREMENT, article_id INTEGER NOT NULL,
+          revision_number INTEGER NOT NULL, title TEXT NOT NULL,
+          meta_description TEXT NOT NULL DEFAULT '', markdown_body TEXT NOT NULL,
+          rendered_html TEXT NOT NULL DEFAULT '',
+          reason TEXT NOT NULL DEFAULT 'saved', created_at TEXT NOT NULL,
+          FOREIGN KEY(article_id) REFERENCES articles(id) ON DELETE CASCADE,
+          UNIQUE(article_id, revision_number)
+        );
+        CREATE INDEX IF NOT EXISTS idx_article_revisions_article
+          ON article_revisions(article_id, revision_number DESC);
+        CREATE TABLE IF NOT EXISTS quality_reports (
+          id INTEGER PRIMARY KEY AUTOINCREMENT, article_id INTEGER NOT NULL,
+          content_hash TEXT NOT NULL, report_json TEXT NOT NULL, created_at TEXT NOT NULL,
+          FOREIGN KEY(article_id) REFERENCES articles(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_quality_reports_article
+          ON quality_reports(article_id, id DESC);
+        CREATE TABLE IF NOT EXISTS review_decisions (
+          id INTEGER PRIMARY KEY AUTOINCREMENT, article_id INTEGER NOT NULL,
+          content_hash TEXT NOT NULL,
+          decision TEXT NOT NULL CHECK(decision IN ('APPROVED','CHANGES_REQUESTED')),
+          notes TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL,
+          FOREIGN KEY(article_id) REFERENCES articles(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_review_decisions_article
+          ON review_decisions(article_id, id DESC);
         CREATE TABLE IF NOT EXISTS automation_queue (
           id INTEGER PRIMARY KEY AUTOINCREMENT, article_id INTEGER,
           state TEXT NOT NULL DEFAULT 'PAUSED' CHECK(state IN ('RUNNING','PAUSED')),
@@ -86,6 +121,12 @@ def init_db() -> None:
           updated_at TEXT NOT NULL
         );
         """)
+        article_columns = {row["name"] for row in conn.execute("PRAGMA table_info(articles)").fetchall()}
+        if "meta_description" not in article_columns:
+            conn.execute("ALTER TABLE articles ADD COLUMN meta_description TEXT NOT NULL DEFAULT ''")
+        revision_columns = {row["name"] for row in conn.execute("PRAGMA table_info(article_revisions)").fetchall()}
+        if "meta_description" not in revision_columns:
+            conn.execute("ALTER TABLE article_revisions ADD COLUMN meta_description TEXT NOT NULL DEFAULT ''")
         # Seed initial product if empty
         cur = conn.execute("SELECT COUNT(*) AS c FROM user_products")
         if cur.fetchone()["c"] == 0:
@@ -106,27 +147,169 @@ def init_db() -> None:
 def save_article(*, topic: str, primary_keyword: str, title: str, markdown_body: str,
                  rendered_html: str = "", schema_json: dict[str, Any] | str | None = None,
                  status: str = "DRAFT", article_id: int | None = None,
-                 blogger_post_id: str = "", blogger_blog_id: str = "") -> int:
+                 blogger_post_id: str = "", blogger_blog_id: str = "",
+                 meta_description: str | None = None) -> int:
     if status not in {"QUEUED","DRAFT","PAUSED","PUBLISHED"}: raise ValueError(f"Unsupported status: {status}")
     now = utc_now()
     schema_text = schema_json if isinstance(schema_json, str) else json.dumps(schema_json or {}, ensure_ascii=False)
     with connection() as conn:
         if article_id is not None:
-            cur = conn.execute("""UPDATE articles SET topic=?,primary_keyword=?,title=?,markdown_body=?,
-              rendered_html=?,schema_json=?,status=?,
+            previous = conn.execute(
+                "SELECT title,meta_description,markdown_body,rendered_html FROM articles WHERE id=?",
+                (article_id,),
+            ).fetchone()
+            if previous is None:
+                raise ValueError(f"Article {article_id} does not exist")
+            cur = conn.execute("""UPDATE articles SET topic=?,primary_keyword=?,title=?,
+              meta_description=COALESCE(?,meta_description),markdown_body=?,rendered_html=?,schema_json=?,status=?,
               blogger_post_id=CASE WHEN ?='' THEN blogger_post_id ELSE ? END,
               blogger_blog_id=CASE WHEN ?='' THEN blogger_blog_id ELSE ? END,updated_at=?,
               published_at=CASE WHEN ?='PUBLISHED' AND published_at='' THEN ? ELSE published_at END WHERE id=?""",
-              (topic,primary_keyword,title,markdown_body,rendered_html,schema_text,status,
+              (topic,primary_keyword,title,meta_description,markdown_body,rendered_html,schema_text,status,
                blogger_post_id,blogger_post_id,blogger_blog_id,blogger_blog_id,now,status,now,article_id))
             if cur.rowcount == 0: raise ValueError(f"Article {article_id} does not exist")
+            if (
+                previous["title"] != title
+                or (meta_description is not None and previous["meta_description"] != meta_description)
+                or previous["markdown_body"] != markdown_body
+                or previous["rendered_html"] != rendered_html
+            ):
+                _save_article_revision(
+                    conn, article_id, title,
+                    meta_description if meta_description is not None else previous["meta_description"],
+                    markdown_body, rendered_html, "saved", now
+                )
             return article_id
-        cur = conn.execute("""INSERT INTO articles(topic,primary_keyword,title,markdown_body,rendered_html,
+        cur = conn.execute("""INSERT INTO articles(topic,primary_keyword,title,meta_description,markdown_body,rendered_html,
           schema_json,status,blogger_post_id,blogger_blog_id,created_at,updated_at,published_at)
-          VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
-          (topic,primary_keyword,title,markdown_body,rendered_html,schema_text,status,blogger_post_id,
+          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+          (topic,primary_keyword,title,meta_description or "",markdown_body,rendered_html,schema_text,status,blogger_post_id,
            blogger_blog_id,now,now,now if status == "PUBLISHED" else ""))
+        new_id = int(cur.lastrowid)
+        _save_article_revision(
+            conn, new_id, title, meta_description or "", markdown_body, rendered_html, "created", now
+        )
+        return new_id
+
+def _save_article_revision(
+    conn: sqlite3.Connection,
+    article_id: int,
+    title: str,
+    meta_description: str,
+    markdown_body: str,
+    rendered_html: str,
+    reason: str,
+    created_at: str,
+) -> None:
+    revision_number = int(conn.execute(
+        "SELECT COALESCE(MAX(revision_number),0)+1 FROM article_revisions WHERE article_id=?",
+        (article_id,),
+    ).fetchone()[0])
+    conn.execute(
+        """INSERT INTO article_revisions
+        (article_id,revision_number,title,meta_description,markdown_body,rendered_html,reason,created_at)
+        VALUES(?,?,?,?,?,?,?,?)""",
+        (article_id,revision_number,title,meta_description,markdown_body,rendered_html,reason,created_at),
+    )
+
+def list_article_revisions(article_id: int, limit: int = 50) -> list[dict[str, Any]]:
+    with connection() as conn:
+        rows = conn.execute(
+            """SELECT id,article_id,revision_number,title,meta_description,markdown_body,rendered_html,reason,created_at
+            FROM article_revisions WHERE article_id=?
+            ORDER BY revision_number DESC LIMIT ?""",
+            (article_id,max(1,min(limit,100))),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+def save_quality_report(article_id: int, title: str, markdown_body: str,
+                        report: dict[str, Any], meta_description: str = "") -> int:
+    now = utc_now()
+    digest = content_fingerprint(title, markdown_body, meta_description)
+    with connection() as conn:
+        current = conn.execute(
+            "SELECT title,meta_description,markdown_body FROM articles WHERE id=?",(article_id,)
+        ).fetchone()
+        if not current:
+            raise ValueError(f"Article {article_id} does not exist")
+        current_digest = content_fingerprint(
+            current["title"],current["markdown_body"],current["meta_description"]
+        )
+        if digest != current_digest:
+            raise ValueError("Article changed while the quality review was running; run the review again.")
+        cur = conn.execute(
+            "INSERT INTO quality_reports(article_id,content_hash,report_json,created_at) VALUES(?,?,?,?)",
+            (article_id,digest,json.dumps(report,ensure_ascii=False),now),
+        )
         return int(cur.lastrowid)
+
+def list_quality_reports(article_id: int, limit: int = 20) -> list[dict[str, Any]]:
+    with connection() as conn:
+        rows = conn.execute(
+            """SELECT id,article_id,content_hash,report_json,created_at
+            FROM quality_reports WHERE article_id=? ORDER BY id DESC LIMIT ?""",
+            (article_id,max(1,min(limit,100))),
+        ).fetchall()
+    result = []
+    for row in rows:
+        item = dict(row)
+        item["report"] = json.loads(item.pop("report_json"))
+        result.append(item)
+    return result
+
+def save_review_decision(article_id: int, decision: str, notes: str = "") -> dict[str, Any]:
+    if decision not in {"APPROVED","CHANGES_REQUESTED"}:
+        raise ValueError(f"Unsupported review decision: {decision}")
+    now = utc_now()
+    with connection() as conn:
+        article = conn.execute(
+            "SELECT title,meta_description,markdown_body FROM articles WHERE id=?",(article_id,)
+        ).fetchone()
+        if not article:
+            raise ValueError(f"Article {article_id} does not exist")
+        digest = content_fingerprint(
+            article["title"],article["markdown_body"],article["meta_description"]
+        )
+        latest_report = conn.execute(
+            "SELECT content_hash FROM quality_reports WHERE article_id=? ORDER BY id DESC LIMIT 1",
+            (article_id,),
+        ).fetchone()
+        if not latest_report or latest_report["content_hash"] != digest:
+            raise ValueError("Run a fresh quality review of the current saved draft before recording a decision.")
+        cur = conn.execute(
+            """INSERT INTO review_decisions
+            (article_id,content_hash,decision,notes,created_at) VALUES(?,?,?,?,?)""",
+            (article_id,digest,decision,notes.strip(),now),
+        )
+        return {
+            "id": int(cur.lastrowid),
+            "article_id": article_id,
+            "content_hash": digest,
+            "decision": decision,
+            "notes": notes.strip(),
+            "created_at": now,
+        }
+
+def get_article_review_status(article_id: int) -> dict[str, Any]:
+    with connection() as conn:
+        article = conn.execute(
+            "SELECT title,meta_description,markdown_body FROM articles WHERE id=?",(article_id,)
+        ).fetchone()
+        if not article:
+            return {"status":"NOT_FOUND","decision":None}
+        latest = conn.execute(
+            """SELECT decision,notes,created_at,content_hash FROM review_decisions
+            WHERE article_id=? ORDER BY id DESC LIMIT 1""",
+            (article_id,),
+        ).fetchone()
+    if not latest:
+        return {"status":"DRAFT","decision":None}
+    current_hash = content_fingerprint(
+        article["title"],article["markdown_body"],article["meta_description"]
+    )
+    if latest["content_hash"] != current_hash:
+        return {"status":"NEEDS_REVIEW","decision":dict(latest)}
+    return {"status":latest["decision"],"decision":dict(latest)}
 
 def get_article(article_id: int) -> dict[str, Any] | None:
     with connection() as conn: row = conn.execute("SELECT * FROM articles WHERE id=?", (article_id,)).fetchone()

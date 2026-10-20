@@ -172,6 +172,7 @@
           <div class="action-buttons-group quality-review-actions">
             <button class="btn btn-primary" id="btn-quality-check">Save draft &amp; run checks</button>
             <button class="btn btn-accent" id="btn-quality-approve" disabled>Approve reviewed draft</button>
+            <button class="btn btn-primary hidden" id="btn-review-publish-blogger" type="button">Publish linked Blogger draft</button>
             <button class="btn btn-secondary" id="btn-quality-request-changes" disabled>Request changes</button>
             <button class="btn btn-secondary" id="btn-quality-history">Load saved reports</button>
             <button class="btn btn-secondary" id="btn-quality-revisions">Load revision history</button>
@@ -529,6 +530,7 @@
             </a>
             
             <form id="product-form" class="vault-form">
+              <input type="hidden" id="prod-id">
               <div class="form-group">
                 <label for="prod-title">Product Title</label>
                 <input type="text" id="prod-title" class="form-control" placeholder="e.g. Code to Career — Python Fresher to Job-Ready" required>
@@ -545,9 +547,34 @@
               </div>
               <div class="form-group">
                 <label for="prod-desc">Short Description / Pitch</label>
-                <input type="text" id="prod-desc" class="form-control" placeholder="Zero to placement blueprint with 25+ real projects & interview roadmap">
+                <input type="text" id="prod-desc" class="form-control" placeholder="Describe this product accurately" required>
               </div>
-              <button type="submit" class="btn btn-primary full-width" id="btn-save-product">Add Product to Vault &rarr;</button>
+              <div class="form-group">
+                <label for="prod-image">Cover image URL (optional)</label>
+                <input type="url" id="prod-image" class="form-control" placeholder="https://...">
+              </div>
+              <div class="form-group">
+                <label for="prod-keywords">Relevant topics and keywords</label>
+                <input type="text" id="prod-keywords" class="form-control" placeholder="python, career, interview">
+              </div>
+              <div class="form-row">
+                <div class="form-group flex-1">
+                  <label for="prod-badge">Category</label>
+                  <input type="text" id="prod-badge" class="form-control" placeholder="eBook or course">
+                </div>
+                <div class="form-group flex-1">
+                  <label for="prod-cta">Call-to-action</label>
+                  <input type="text" id="prod-cta" class="form-control" value="Get the guide" maxlength="80">
+                </div>
+              </div>
+              <label class="toggle-control">
+                <input type="checkbox" id="prod-active" checked>
+                <span>Enabled for storefront and article recommendations</span>
+              </label>
+              <div class="action-buttons-group">
+                <button type="submit" class="btn btn-primary" id="btn-save-product">Save owned product</button>
+                <button type="button" class="btn btn-secondary hidden" id="btn-cancel-product-edit">Cancel edit</button>
+              </div>
             </form>
 
             <div class="products-list-wrapper">
@@ -575,19 +602,63 @@
             </div>
             <div class="vault-disclosure-note"><span aria-hidden="true">ⓘ</span><p>Affiliate recommendations are inserted with a disclosure. Add links only where they are useful and relevant.</p></div>
             <form id="affiliate-form" class="vault-form">
+              <input type="hidden" id="aff-id">
               <div class="form-group">
                 <label for="aff-name">Product Name</label>
                 <input type="text" id="aff-name" class="form-control" placeholder="e.g. DigitalOcean Cloud VPS" required>
               </div>
               <div class="form-group">
-                <label for="aff-url">Tracking URL</label>
+                <label for="aff-url">Affiliate URL</label>
                 <input type="url" id="aff-url" class="form-control" placeholder="https://..." required>
               </div>
               <div class="form-group">
-                <label for="aff-keywords">Trigger Keywords</label>
-                <input type="text" id="aff-keywords" class="form-control" placeholder="vps, hosting, cloud">
+                <label for="aff-desc">Short product description</label>
+                <input type="text" id="aff-desc" class="form-control" placeholder="Describe the product accurately" required>
               </div>
-              <button type="submit" class="btn btn-secondary full-width">Save Affiliate Entry</button>
+              <div class="form-group">
+                <label for="aff-keywords">Relevant keywords (required)</label>
+                <input type="text" id="aff-keywords" class="form-control" placeholder="vps, hosting, cloud" required>
+              </div>
+              <div class="form-row">
+                <div class="form-group flex-1">
+                  <label for="aff-category">Category (optional)</label>
+                  <input type="text" id="aff-category" class="form-control">
+                </div>
+                <div class="form-group flex-1">
+                  <label for="aff-price">Verified price and currency (optional)</label>
+                  <input type="text" id="aff-price" class="form-control" placeholder="Only if verified">
+                </div>
+              </div>
+              <div class="form-group">
+                <label for="aff-image">Product image URL (optional)</label>
+                <input type="url" id="aff-image" class="form-control" placeholder="https://...">
+              </div>
+              <div class="form-row">
+                <div class="form-group flex-1">
+                  <label for="aff-cta">Call-to-action</label>
+                  <input type="text" id="aff-cta" class="form-control" value="View product" maxlength="80">
+                </div>
+                <div class="form-group flex-1">
+                  <label for="aff-placement">Placement preference</label>
+                  <select id="aff-placement" class="form-control">
+                    <option value="inline">Contextual inline recommendation</option>
+                    <option value="product_card">Product card</option>
+                    <option value="article_end" selected>Article-end recommendation</option>
+                  </select>
+                </div>
+              </div>
+              <div class="form-group">
+                <label for="aff-disclosure">Disclosure text</label>
+                <textarea id="aff-disclosure" class="form-control" rows="2" required>We may receive a commission for purchases made through this link at no additional cost to you.</textarea>
+              </div>
+              <label class="toggle-control">
+                <input type="checkbox" id="aff-active" checked>
+                <span>Enabled for article recommendations</span>
+              </label>
+              <div class="action-buttons-group">
+                <button type="submit" class="btn btn-secondary" id="btn-save-affiliate">Save affiliate product</button>
+                <button type="button" class="btn btn-secondary hidden" id="btn-cancel-affiliate-edit">Cancel edit</button>
+              </div>
             </form>
             <div class="vault-list-heading"><h3>Saved recommendations</h3><span id="vault-affiliates-count" class="vault-list-count">0</span></div>
             <div id="affiliates-table-container" aria-live="polite"><p class="vault-empty">Loading affiliate links…</p></div>

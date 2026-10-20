@@ -59,6 +59,8 @@ class EbookPwaTests(unittest.TestCase):
                 "price": "₹499",
                 "description": "A practical guide.",
                 "badge": "Featured",
+                "image_url": "",
+                "cta_text": "Get the guide",
             }],
         })
 

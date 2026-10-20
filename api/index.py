@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import hmac
 import re
+from urllib.parse import urlparse
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Literal, Optional
@@ -129,19 +130,30 @@ class SyncNavigationRequest(BaseModel):
     confirmed: bool = False
 
 class SaveAffiliateRequest(BaseModel):
-    product_name: str
-    keywords: list[str]
-    tracking_url: str
-    disclosure: str
+    product_name: str = Field(..., min_length=1, max_length=200)
+    keywords: list[str] = Field(..., min_length=1, max_length=30)
+    tracking_url: str = Field(..., min_length=1, max_length=2048)
+    disclosure: str = Field(..., min_length=1, max_length=500)
     affiliate_id: Optional[int] = None
+    description: str = Field(default="", max_length=500)
+    image_url: str = Field(default="", max_length=2048)
+    category: str = Field(default="", max_length=100)
+    price: str = Field(default="", max_length=60)
+    cta_text: str = Field(default="View product", max_length=80)
+    placement: Literal["inline", "product_card", "article_end"] = "article_end"
+    is_active: bool = True
 
 class SaveProductRequest(BaseModel):
-    title: str
-    url: str
-    price: Optional[str] = ""
-    description: Optional[str] = ""
-    badge: Optional[str] = "Recommended Guide"
+    title: str = Field(..., min_length=1, max_length=200)
+    url: str = Field(..., min_length=1, max_length=2048)
+    price: Optional[str] = Field(default="", max_length=60)
+    description: str = Field(..., min_length=1, max_length=500)
+    badge: Optional[str] = Field(default="Recommended Guide", max_length=80)
     product_id: Optional[int] = None
+    image_url: str = Field(default="", max_length=2048)
+    keywords: list[str] = Field(default_factory=list, max_length=30)
+    cta_text: str = Field(default="Get the guide", max_length=80)
+    is_active: bool = True
 
 class AutopilotRequest(BaseModel):
     topic: str = Field(..., min_length=2, description="User-selected topic to generate")
@@ -213,14 +225,14 @@ def run_autopilot(req: AutopilotRequest):
         if not req.product_id:
             raise HTTPException(status_code=400, detail="Select a relevant product or turn off product insertion.")
         selected_product = db.get_product(req.product_id)
-        if not selected_product:
+        if not selected_product or not selected_product.get("is_active", 1):
             raise HTTPException(status_code=404, detail="The selected product is no longer available.")
     selected_affiliate = None
     if req.include_affiliate:
         if not req.affiliate_id:
             raise HTTPException(status_code=400, detail="Select a relevant affiliate recommendation or turn it off.")
         selected_affiliate = next(
-            (item for item in db.list_affiliates() if item["id"] == req.affiliate_id),
+            (item for item in db.list_affiliates(active_only=True) if item["id"] == req.affiliate_id),
             None,
         )
         if not selected_affiliate:
@@ -251,8 +263,10 @@ def run_autopilot(req: AutopilotRequest):
             product_snippet = ebook_card_box(
                 title=selected_product["title"],
                 product_url=selected_product["url"],
-                price=selected_product.get("price") or "Special Offer",
-                tagline=selected_product.get("description") or "Recommended comprehensive developer resource.",
+                price=selected_product.get("price") or "",
+                tagline=selected_product.get("description") or "",
+                cover_image_url=selected_product.get("image_url") or "",
+                cta_text=selected_product.get("cta_text") or "Get the guide",
             )
 
         # 3. Affiliate snippet (optional)
@@ -262,6 +276,11 @@ def run_autopilot(req: AutopilotRequest):
                 product_name=selected_affiliate["product_name"],
                 tracking_url=selected_affiliate["tracking_url"],
                 disclosure=selected_affiliate["disclosure_snippet"],
+                description=selected_affiliate.get("description") or "",
+                image_url=selected_affiliate.get("image_url") or "",
+                category=selected_affiliate.get("category") or "",
+                price=selected_affiliate.get("price") or "",
+                cta_text=selected_affiliate.get("cta_text") or "View product",
             )
 
         # 4. Render HTML with schema and TOC. Images are explicitly chosen later.
@@ -274,6 +293,8 @@ def run_autopilot(req: AutopilotRequest):
             include_toc=True,
             ebook_html=product_snippet,
             affiliate_html=affiliate_snippet,
+            affiliate_placement=selected_affiliate.get("placement", "article_end") if selected_affiliate else "article_end",
+            affiliate_keywords=selected_affiliate.get("trigger_keywords_list", []) if selected_affiliate else [],
         )
 
         # 5. Save to database.
@@ -453,11 +474,15 @@ def _render_article_with_options(
         product_snippet = ebook_card_box(
             title=product["title"],
             product_url=product["url"],
-            price=product.get("price") or "View details",
-            tagline=product.get("description") or "Recommended resource.",
+            price=product.get("price") or "",
+            tagline=product.get("description") or "",
+            cover_image_url=product.get("image_url") or "",
+            cta_text=product.get("cta_text") or "Get the guide",
         )
 
     affiliate_snippet = ""
+    affiliate_placement = "article_end"
+    affiliate_keywords: list[str] = []
     if affiliate_id is not None:
         affiliate = next((item for item in db.list_affiliates() if item["id"] == affiliate_id), None)
         if not affiliate:
@@ -466,7 +491,14 @@ def _render_article_with_options(
             affiliate["product_name"],
             affiliate["tracking_url"],
             affiliate["disclosure_snippet"],
+            description=affiliate.get("description") or "",
+            image_url=affiliate.get("image_url") or "",
+            category=affiliate.get("category") or "",
+            price=affiliate.get("price") or "",
+            cta_text=affiliate.get("cta_text") or "View product",
         )
+        affiliate_placement = affiliate.get("placement") or "article_end"
+        affiliate_keywords = affiliate.get("trigger_keywords_list", [])
 
     search_description = search_description_or_generate(description, markdown_text, title)
     rendered, schema = render_article(
@@ -477,6 +509,8 @@ def _render_article_with_options(
         include_toc=include_toc,
         ebook_html=product_snippet or extra_ebook_html,
         affiliate_html=affiliate_snippet,
+        affiliate_placement=affiliate_placement,
+        affiliate_keywords=affiliate_keywords,
         featured_image_html=featured_image_html,
         section_image_html=section_image_html,
     )
@@ -682,6 +716,20 @@ def record_article_review(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 # Products Vault Routes (My Products / Instamojo Books)
+def _require_https_url(value: str, label: str, *, optional: bool = False) -> str:
+    value = value.strip()
+    if optional and not value:
+        return value
+    try:
+        parsed = urlparse(value)
+        valid = parsed.scheme == "https" and bool(parsed.hostname) and not parsed.username and not parsed.password
+    except ValueError:
+        valid = False
+    if not valid:
+        raise HTTPException(status_code=422, detail=f"{label} must be a valid HTTPS URL.")
+    return value
+
+
 @app.get("/api/products")
 def list_all_products():
     return db.list_products()
@@ -692,7 +740,7 @@ def get_ebook_catalog():
     catalog = []
     for product in db.list_products():
         url = str(product.get("url") or "").strip()
-        if not url.startswith("https://"):
+        if not product.get("is_active", 1) or not url.startswith("https://"):
             continue
         catalog.append({
             "id": product["id"],
@@ -701,12 +749,16 @@ def get_ebook_catalog():
             "price": product.get("price") or "",
             "description": product.get("description") or "",
             "badge": product.get("badge") or "Digital guide",
+            "image_url": product.get("image_url") or "",
+            "cta_text": product.get("cta_text") or "Get the guide",
         })
     return {"products": catalog}
 
 @app.post("/api/products")
 def save_single_product(req: SaveProductRequest):
     try:
+        _require_https_url(req.url, "Checkout URL")
+        _require_https_url(req.image_url, "Product image URL", optional=True)
         pid = db.save_product(
             title=req.title,
             url=req.url,
@@ -714,15 +766,24 @@ def save_single_product(req: SaveProductRequest):
             description=req.description or "",
             badge=req.badge or "Recommended Guide",
             product_id=req.product_id,
+            image_url=req.image_url,
+            keywords=[word.strip() for word in req.keywords if word.strip()],
+            cta_text=req.cta_text,
+            is_active=req.is_active,
         )
         return {"id": pid, "message": "Product saved successfully."}
     except Exception as exc:
+        if isinstance(exc, HTTPException):
+            raise exc
         raise HTTPException(status_code=400, detail=str(exc))
 
 @app.delete("/api/products/{product_id}")
 def delete_single_product(product_id: int):
-    deleted = db.delete_product(product_id)
-    return {"success": deleted}
+    try:
+        deleted = db.delete_product(product_id)
+        return {"success": deleted}
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 # Affiliate Vault Routes
 @app.get("/api/affiliates")
@@ -732,21 +793,38 @@ def list_all_affiliates():
 @app.post("/api/affiliates")
 def create_affiliate(req: SaveAffiliateRequest):
     try:
+        _require_https_url(req.tracking_url, "Affiliate URL")
+        _require_https_url(req.image_url, "Product image URL", optional=True)
+        keywords = list(dict.fromkeys(word.strip() for word in req.keywords if word.strip()))
+        if not keywords:
+            raise HTTPException(status_code=422, detail="Add at least one relevant keyword.")
         aid = db.save_affiliate(
             req.product_name,
-            req.keywords,
+            keywords,
             req.tracking_url,
             req.disclosure,
             req.affiliate_id,
+            description=req.description,
+            image_url=req.image_url,
+            category=req.category,
+            price=req.price,
+            cta_text=req.cta_text,
+            placement=req.placement,
+            is_active=req.is_active,
         )
         return {"id": aid, "message": "Affiliate entry saved."}
     except Exception as exc:
+        if isinstance(exc, HTTPException):
+            raise exc
         raise HTTPException(status_code=400, detail=str(exc))
 
 @app.delete("/api/affiliates/{affiliate_id}")
 def delete_single_affiliate(affiliate_id: int):
-    deleted = db.delete_affiliate(affiliate_id)
-    return {"success": deleted}
+    try:
+        deleted = db.delete_affiliate(affiliate_id)
+        return {"success": deleted}
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 # Blogger & OAuth Routes
 def resolve_current_credentials(request: Optional[Request] = None) -> tuple[Any, dict[str, Any]]:

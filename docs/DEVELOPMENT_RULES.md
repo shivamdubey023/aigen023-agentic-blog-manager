@@ -25,6 +25,9 @@ These rules describe the current FastAPI, vanilla-JavaScript, and Vercel project
 - Render saved Markdown server-side for both preview and Blogger operations; do not trust client-supplied rendered HTML as the source of truth.
 - Keep Google refresh credentials on transient network failures. Report revoked/incomplete credentials separately and provide an explicit user-requested disconnect action.
 - Add product or affiliate blocks only from a specific user-selected vault record; never fall back to an arbitrary first item.
+- Keep owned products and third-party affiliate recommendations separate. Preserve exact user-provided HTTPS destinations; never invent affiliate tracking parameters, prices, claims, or endorsements.
+- Keep vault changes additive. Disable linked products instead of deleting them; reject hard deletion while any saved article or revision references the record.
+- For inline affiliate recommendations, match configured keywords only in ordinary paragraphs, skip content already linked or inside code, and ensure the configured disclosure is included in the rendered card. Do not label keyword matching as semantic relevance.
 - Do not make unapproved, destructive database changes or introduce a paid storage service.
 
 ## Frontend, accessibility, and privacy
@@ -32,6 +35,7 @@ These rules describe the current FastAPI, vanilla-JavaScript, and Vercel project
 - Use semantic HTML, associated labels, keyboard-operable controls, visible focus indicators, and responsive layouts. Check phone-width layouts for clipped content and horizontal overflow.
 - Use `textContent` for plain text. Escape untrusted values before HTML insertion, validate URL schemes before making links, and include `rel="noopener noreferrer"` on links opened in a new tab.
 - Render genuine loading, empty, failure, and success states. Do not fabricate analytics, integration health, or successful actions.
+- A best-effort image-generation failure must leave the article intact and show the failure state. Provider-hosted images are not durable assets; never claim Blogger can retrieve an image without verifying it.
 - Keep article preview and Blogger output on the same renderer. Use semantic Markdown tables, captioned/attributed images, and user-authored portable SVG diagrams; do not silently claim a visual was generated or published if rendering fails.
 - Pollinations image generation is best-effort and rate-limited. Validate response bytes, preview before insertion, identify provider-hosted image URLs as non-durable, and do not claim the image is available in Blogger without checking it.
 - Keep browser requests same-origin and use server APIs for privileged operations. Never trust browser-supplied identity or role data.

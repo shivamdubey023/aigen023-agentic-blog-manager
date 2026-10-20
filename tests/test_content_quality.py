@@ -592,6 +592,82 @@ class ContentQualityApiTests(unittest.TestCase):
         self.assertEqual(sequence[1]["previous"]["url"], "https://blog.example/earlier")
         self.assertIsNone(sequence[1]["next"])
 
+    def test_manual_affiliate_library_supports_edit_disable_and_preserves_linked_records(self):
+        created = self.client.post("/api/affiliates", json={
+            "product_name": "Database course",
+            "tracking_url": "https://partner.example/path?tag=keep",
+            "keywords": ["database", "SQL"],
+            "description": "A course for database fundamentals.",
+            "category": "Education",
+            "price": "",
+            "cta_text": "View course",
+            "placement": "inline",
+            "disclosure": "We may earn a commission.",
+        })
+        self.assertEqual(created.status_code, 200, created.text)
+        affiliate_id = created.json()["id"]
+        saved = self.client.get("/api/affiliates").json()[0]
+        self.assertEqual(saved["tracking_url"], "https://partner.example/path?tag=keep")
+        self.assertEqual(saved["trigger_keywords_list"], ["database", "SQL"])
+        self.assertEqual(saved["placement"], "inline")
+
+        article = self.client.post("/api/articles", json={
+            "topic": "Database article",
+            "primary_keyword": "database",
+            "title": "Database fundamentals",
+            "markdown_body": "# Database fundamentals\n\nA useful article.",
+            "affiliate_id": affiliate_id,
+        })
+        self.assertEqual(article.status_code, 200, article.text)
+
+        update_payload = {
+            "affiliate_id": affiliate_id,
+            "product_name": "Updated course",
+            "tracking_url": saved["tracking_url"],
+            "keywords": saved["trigger_keywords_list"],
+            "description": saved["description"],
+            "category": saved["category"],
+            "price": saved["price"],
+            "image_url": saved["image_url"],
+            "cta_text": saved["cta_text"],
+            "placement": saved["placement"],
+            "disclosure": saved["disclosure_snippet"],
+            "is_active": False,
+        }
+        updated = self.client.post("/api/affiliates", json=update_payload)
+        self.assertEqual(updated.status_code, 200, updated.text)
+        self.assertFalse(self.client.get("/api/affiliates").json()[0]["is_active"])
+        self.assertEqual(self.client.delete(f"/api/affiliates/{affiliate_id}").status_code, 409)
+
+    def test_owned_product_fields_validate_persist_and_hide_disabled_storefront_items(self):
+        product = {
+            "title": "Python guide",
+            "url": "https://seller.example/checkout?item=1",
+            "description": "A concise Python guide.",
+            "price": "USD 12",
+            "image_url": "https://seller.example/cover.jpg",
+            "keywords": ["python", "career"],
+            "badge": "eBook",
+            "cta_text": "Get the book",
+            "is_active": True,
+        }
+        created = self.client.post("/api/products", json=product)
+        self.assertEqual(created.status_code, 200, created.text)
+        product_id = created.json()["id"]
+        saved = next(item for item in self.client.get("/api/products").json() if item["id"] == product_id)
+        self.assertEqual(saved["keywords_list"], ["python", "career"])
+        self.assertIn(product_id, [item["id"] for item in self.client.get("/api/ebook/catalog").json()["products"]])
+
+        saved.update({"product_id": product_id, "keywords": saved["keywords_list"], "is_active": False})
+        updated = self.client.post("/api/products", json=saved)
+        self.assertEqual(updated.status_code, 200, updated.text)
+        catalog_ids = [item["id"] for item in self.client.get("/api/ebook/catalog").json()["products"]]
+        self.assertNotIn(product_id, catalog_ids)
+        self.assertEqual(
+            self.client.post("/api/products", json={**product, "url": "javascript:alert(1)"}).status_code,
+            422,
+        )
+
     def test_generation_never_attaches_an_unselected_vault_item(self):
         client = TestClient(app)
         payload = {
@@ -646,6 +722,37 @@ class ContentQualityMigrationTests(unittest.TestCase):
                     created_at TEXT NOT NULL,
                     UNIQUE(article_id, revision_number)
                 )""")
+                connection.execute("""CREATE TABLE affiliate_vault (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    product_name TEXT NOT NULL,
+                    trigger_keywords TEXT NOT NULL DEFAULT '[]',
+                    tracking_url TEXT NOT NULL,
+                    disclosure_snippet TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )""")
+                connection.execute("""CREATE TABLE user_products (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    title TEXT NOT NULL,
+                    url TEXT NOT NULL,
+                    price TEXT NOT NULL DEFAULT '',
+                    description TEXT NOT NULL DEFAULT '',
+                    badge TEXT NOT NULL DEFAULT 'Recommended Guide',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )""")
+                connection.execute(
+                    """INSERT INTO affiliate_vault
+                    (product_name,trigger_keywords,tracking_url,disclosure_snippet,created_at,updated_at)
+                    VALUES(?,?,?,?,?,?)""",
+                    ("Existing affiliate", '["database"]', "https://partner.example", "Disclosure", "2025-01-01", "2025-01-01"),
+                )
+                connection.execute(
+                    """INSERT INTO user_products
+                    (title,url,price,description,badge,created_at,updated_at)
+                    VALUES(?,?,?,?,?,?,?)""",
+                    ("Existing owned product", "https://seller.example", "", "Description", "Guide", "2025-01-01", "2025-01-01"),
+                )
                 cursor = connection.execute(
                     """INSERT INTO articles
                     (topic,primary_keyword,title,markdown_body,blogger_post_id,blogger_blog_id,created_at,updated_at)
@@ -667,6 +774,12 @@ class ContentQualityMigrationTests(unittest.TestCase):
                 self.assertEqual(saved["markdown_body"], "# Existing draft")
                 self.assertEqual(saved["meta_description"], "")
                 self.assertEqual(saved["blogger_post_id"], "legacy-post")
+                affiliate = db.list_affiliates()[0]
+                self.assertEqual(affiliate["product_name"], "Existing affiliate")
+                self.assertTrue(affiliate["is_active"])
+                product = db.list_products()[0]
+                self.assertEqual(product["title"], "Existing owned product")
+                self.assertTrue(product["is_active"])
                 self.assertEqual(saved["blogger_blog_id"], "legacy-blog")
                 self.assertEqual(saved["include_toc"], 1)
                 db.save_article(

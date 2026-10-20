@@ -45,6 +45,17 @@
     const art = document.createElement('div');
     art.className = 'book-art';
     art.setAttribute('aria-hidden', 'true');
+    const hasCover = typeof book.image_url === 'string' && book.image_url.startsWith('https://');
+    if (hasCover) {
+      const image = document.createElement('img');
+      image.className = 'book-cover-image';
+      image.src = book.image_url;
+      image.alt = book.title;
+      image.loading = 'lazy';
+      image.referrerPolicy = 'no-referrer';
+      art.removeAttribute('aria-hidden');
+      art.append(image);
+    }
     const badge = document.createElement('span');
     badge.className = 'book-badge';
     badge.textContent = book.badge || 'Digital guide';
@@ -58,7 +69,8 @@
     const imprint = document.createElement('small');
     imprint.textContent = 'PRACTICAL DEVELOPER GUIDE';
     miniBook.append(brand, coverTitle, imprint);
-    art.append(badge, miniBook);
+    art.append(badge);
+    if (!hasCover) art.append(miniBook);
 
     const info = document.createElement('div');
     info.className = 'book-info';
@@ -79,7 +91,7 @@
     buy.href = book.url;
     buy.target = '_blank';
     buy.rel = 'noopener noreferrer';
-    buy.textContent = 'View & get the book ↗';
+    buy.textContent = book.cta_text || 'View & get the book ↗';
     buy.setAttribute('aria-label', `Open seller checkout for ${book.title}`);
 
     const save = document.createElement('button');
@@ -124,7 +136,8 @@
     if (!payload || !Array.isArray(payload.products)) return [];
     return payload.products.filter((book) =>
       book && Number.isInteger(book.id) && typeof book.title === 'string' &&
-      typeof book.url === 'string' && book.url.startsWith('https://')
+      typeof book.url === 'string' && book.url.startsWith('https://') &&
+      (!book.image_url || (typeof book.image_url === 'string' && book.image_url.startsWith('https://')))
     );
   }
 

@@ -32,6 +32,7 @@ const state = {
   affiliates: [],
   qualityReviewFresh: false,
   bloggerPosts: [],
+  autoImageRequestedArticleId: null,
 };
 
 const el = {
@@ -131,6 +132,7 @@ const el = {
   btnVerifyBlogger: document.getElementById('btn-verify-blogger'),
   btnUpdateBlogger: document.getElementById('btn-update-blogger'),
   btnPublishBlogger: document.getElementById('btn-publish-blogger'),
+  btnReviewPublishBlogger: document.getElementById('btn-review-publish-blogger'),
   editorProductSelect: document.getElementById('editor-product-select'),
   editorAffiliateSelect: document.getElementById('editor-affiliate-select'),
   btnDeleteLocal: document.getElementById('btn-delete-local-copy'),
@@ -466,7 +468,65 @@ if (el.btnOpenAutopilotInEditor) {
   el.btnOpenAutopilotInEditor.addEventListener('click', () => {
     loadArticleIntoEditor(state.currentArticle);
     switchTab('tab-editor');
+    void autoGenerateFeaturedImage();
   });
+}
+
+async function autoGenerateFeaturedImage() {
+  const article = state.currentArticle;
+  if (!article.id || state.autoImageRequestedArticleId === article.id) return;
+  if (/!\[[^\]]*]\(\s*<?https?:\/\//i.test(el.markdownEditor.value)) {
+    state.autoImageRequestedArticleId = article.id;
+    el.imageGenerationStatus.textContent = 'An image is already present in this article; it was preserved.';
+    return;
+  }
+  state.autoImageRequestedArticleId = article.id;
+  el.generatedImageTopic.value = article.topic || article.title;
+  el.imageGenerationStatus.textContent = 'Attempting automatic featured-image generation. This free provider is best-effort and may rate-limit requests.';
+  try {
+    const response = await fetch('/api/generate-image', {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ topic: article.topic || article.title, width: 768, height: 512 }),
+      signal: AbortSignal.timeout(90000),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || 'Automatic featured-image generation failed.');
+    const imageUrl = safeHttpsUrl(data.image_url);
+    if (!imageUrl || !imageUrl.startsWith('https://image.pollinations.ai/')) {
+      throw new Error('The image provider returned an unexpected URL; no image was inserted.');
+    }
+    const image = new Image();
+    image.referrerPolicy = 'no-referrer';
+    image.onload = async () => {
+      if (state.currentArticle.id !== article.id ||
+          /!\[[^\]]*]\(\s*<?https?:\/\//i.test(el.markdownEditor.value)) return;
+      el.generatedImage.src = imageUrl;
+      el.generatedImage.alt = `Generated illustration for ${article.topic || article.title}`;
+      el.generatedImagePreview.classList.remove('hidden');
+      state.selectedStockImage = {
+        image_url: imageUrl,
+        thumbnail_url: imageUrl,
+        alt_text: `Illustration of ${article.topic || article.title}`,
+        photographer: 'Pollinations AI',
+        photographer_url: 'https://pollinations.ai/',
+        source_url: 'https://pollinations.ai/',
+        provider: 'pollinations',
+      };
+      el.imageAlt.value = state.selectedStockImage.alt_text;
+      await insertArticleImage(true);
+      el.imageGenerationStatus.textContent = data.warning ||
+        'Generated image loaded and inserted. It remains provider-hosted and is not durably stored.';
+    };
+    image.onerror = () => {
+      el.imageGenerationStatus.textContent = 'The generated image could not be loaded; the article was left unchanged.';
+      showToast('The generated image could not be loaded; the article was left unchanged.', 'error');
+    };
+    image.src = imageUrl;
+  } catch (err) {
+    el.imageGenerationStatus.textContent = `Automatic image generation did not complete: ${err.message}`;
+    showToast(`Automatic image generation failed; the saved draft is unchanged. ${err.message}`, 'error');
+  }
 }
 
 // Rewriter (Fix Low-Value Content)
@@ -876,6 +936,7 @@ function updateLocalDeleteButton() {
   el.btnVerifyBlogger?.classList.toggle('hidden', !linked);
   el.btnUpdateBlogger?.classList.toggle('hidden', !linked);
   el.btnPublishBlogger?.classList.toggle('hidden', !linked || state.currentArticle.status === 'PUBLISHED');
+  el.btnReviewPublishBlogger?.classList.toggle('hidden', !linked || state.currentArticle.status === 'PUBLISHED');
 }
 
 async function renderPreview() {
@@ -1096,6 +1157,7 @@ async function runLinkedBloggerAction(action) {
 
 el.btnUpdateBlogger?.addEventListener('click', () => runLinkedBloggerAction('update'));
 el.btnPublishBlogger?.addEventListener('click', () => runLinkedBloggerAction('publish'));
+el.btnReviewPublishBlogger?.addEventListener('click', () => runLinkedBloggerAction('publish'));
 
 if (el.btnVerifyBlogger) {
   el.btnVerifyBlogger.addEventListener('click', async () => {
@@ -1519,6 +1581,21 @@ async function loadProducts() {
   }
 }
 
+function productPayload(product, isActive = Boolean(product.is_active)) {
+  return {
+    product_id: Number(product.id),
+    title: product.title,
+    url: product.url,
+    price: product.price || '',
+    description: product.description || '',
+    badge: product.badge || 'Recommended Guide',
+    image_url: product.image_url || '',
+    keywords: product.keywords_list || [],
+    cta_text: product.cta_text || 'Get the guide',
+    is_active: isActive,
+  };
+}
+
 function renderProductsTable() {
   if (!el.productsTableContainer) return;
   if (el.vaultProductCount) el.vaultProductCount.textContent = String(state.products.length);
@@ -1536,7 +1613,10 @@ function renderProductsTable() {
           <strong class="vault-item-title">${escapeHtml(p.title)}</strong>
           <span class="vault-item-meta">${escapeHtml(p.url)}</span>
           ${p.price ? `<span class="vault-item-price">${escapeHtml(p.price)}</span>` : ''}
+          <span class="vault-item-meta">${p.is_active ? 'Enabled' : 'Disabled'} · ${escapeHtml((p.keywords_list || []).join(', ') || 'No topic keywords')}</span>
         </div>
+        <button class="btn btn-secondary btn-sm" type="button" onclick="editProductItem(${Number(p.id)})">Edit</button>
+        <button class="btn btn-secondary btn-sm" type="button" onclick="toggleProductItem(${Number(p.id)}, ${!p.is_active})">${p.is_active ? 'Disable' : 'Enable'}</button>
         <button class="btn btn-secondary btn-sm" type="button" onclick="deleteProductItem(${Number(p.id)})" aria-label="Delete ${escapeHtml(p.title)}">Remove</button>
       </article>
     `;
@@ -1546,16 +1626,18 @@ function renderProductsTable() {
 
   // Render live preview for the first product
   if (state.products.length > 0 && el.ebookLivePreview) {
-    const prod = state.products[0];
+    const prod = state.products.find(item => item.is_active) || state.products[0];
     const productUrl = safeHttpsUrl(prod.url);
     const checkoutAction = productUrl
-      ? `<a href="${escapeHtml(productUrl)}" target="_blank" rel="noopener noreferrer" class="btn btn-primary btn-sm">Get on Instamojo &rarr;</a>`
+      ? `<a href="${escapeHtml(productUrl)}" target="_blank" rel="noopener noreferrer" class="btn btn-primary btn-sm">${escapeHtml(prod.cta_text || 'Get the guide')}</a>`
       : '<span class="btn btn-primary btn-sm" aria-disabled="true">Checkout URL unavailable</span>';
+    const imageUrl = safeHttpsUrl(prod.image_url);
     el.ebookLivePreview.innerHTML = `
       <div class="vault-preview-card">
+        ${imageUrl ? `<img src="${escapeHtml(imageUrl)}" alt="${escapeHtml(prod.title)}" loading="lazy" class="vault-preview-image">` : ''}
         <span class="badge yellow">${escapeHtml(prod.badge || 'Recommended guide')}</span>
         <h4>${escapeHtml(prod.title)}</h4>
-        <p>${escapeHtml(prod.description || 'Digital guide')}</p>
+        <p>${escapeHtml(prod.description || '')}</p>
         <div class="vault-preview-card-footer">
           <span class="vault-preview-price">${escapeHtml(prod.price || 'View details')}</span>
           ${checkoutAction}
@@ -1568,11 +1650,12 @@ function renderProductsTable() {
 function populateProductSelects() {
   if (el.autopilotProductSelect) el.autopilotProductSelect.innerHTML = '<option value="">-- Choose Product --</option>';
   if (el.editorProductSelect) el.editorProductSelect.innerHTML = '<option value="">Select a saved product</option>';
-  state.products.forEach(p => {
+  state.products.filter(p => p.is_active || Number(p.id) === Number(state.currentArticle.productId)).forEach(p => {
     const opt = document.createElement('option');
     opt.value = String(p.id);
-    opt.textContent = `${p.title} (${p.price || ''})`;
-    if (el.autopilotProductSelect) el.autopilotProductSelect.appendChild(opt.cloneNode(true));
+    opt.textContent = `${p.title}${p.is_active ? '' : ' (disabled; existing selection)'}`;
+    if (!p.is_active) opt.disabled = true;
+    if (p.is_active && el.autopilotProductSelect) el.autopilotProductSelect.appendChild(opt.cloneNode(true));
     if (el.editorProductSelect) el.editorProductSelect.appendChild(opt);
   });
   if (el.editorProductSelect && state.currentArticle.productId) {
@@ -1587,17 +1670,32 @@ if (el.productForm) {
     const url = document.getElementById('prod-url').value.trim();
     const price = document.getElementById('prod-price').value.trim();
     const description = document.getElementById('prod-desc').value.trim();
+    const productId = document.getElementById('prod-id').value;
 
     try {
       const res = await fetch('/api/products', {
         method: 'POST',
         headers: getAuthHeaders(),
-        body: JSON.stringify({ title, url, price, description }),
+        body: JSON.stringify({
+          product_id: productId ? Number(productId) : null,
+          title,
+          url,
+          price,
+          description,
+          image_url: document.getElementById('prod-image').value.trim(),
+          keywords: document.getElementById('prod-keywords').value.split(',').map(item => item.trim()).filter(Boolean),
+          badge: document.getElementById('prod-badge').value.trim() || 'Recommended Guide',
+          cta_text: document.getElementById('prod-cta').value.trim() || 'Get the guide',
+          is_active: document.getElementById('prod-active').checked,
+        }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || 'Failed to save product');
-      showToast('Product saved in vault!', 'success');
+      showToast(productId ? 'Owned product updated.' : 'Owned product saved.', 'success');
       el.productForm.reset();
+      document.getElementById('prod-id').value = '';
+      document.getElementById('btn-save-product').textContent = 'Save owned product';
+      document.getElementById('btn-cancel-product-edit').classList.add('hidden');
       loadProducts();
     } catch (err) {
       showToast(err.message, 'error');
@@ -1605,11 +1703,55 @@ if (el.productForm) {
   });
 }
 
+window.editProductItem = function(id) {
+  const product = state.products.find(item => Number(item.id) === Number(id));
+  if (!product) return;
+  document.getElementById('prod-id').value = product.id;
+  document.getElementById('prod-title').value = product.title || '';
+  document.getElementById('prod-url').value = product.url || '';
+  document.getElementById('prod-price').value = product.price || '';
+  document.getElementById('prod-desc').value = product.description || '';
+  document.getElementById('prod-image').value = product.image_url || '';
+  document.getElementById('prod-keywords').value = (product.keywords_list || []).join(', ');
+  document.getElementById('prod-badge').value = product.badge || '';
+  document.getElementById('prod-cta').value = product.cta_text || 'Get the guide';
+  document.getElementById('prod-active').checked = Boolean(product.is_active);
+  document.getElementById('btn-save-product').textContent = 'Update owned product';
+  document.getElementById('btn-cancel-product-edit').classList.remove('hidden');
+  document.getElementById('prod-title').focus();
+};
+
+document.getElementById('btn-cancel-product-edit')?.addEventListener('click', () => {
+  el.productForm.reset();
+  document.getElementById('prod-id').value = '';
+  document.getElementById('btn-save-product').textContent = 'Save owned product';
+  document.getElementById('btn-cancel-product-edit').classList.add('hidden');
+});
+
+window.toggleProductItem = async function(id, isActive) {
+  const product = state.products.find(item => Number(item.id) === Number(id));
+  if (!product) return;
+  try {
+    const res = await fetch('/api/products', {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(productPayload(product, isActive)),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Product status could not be updated.');
+    showToast(isActive ? 'Owned product enabled.' : 'Owned product disabled.', 'success');
+    await loadProducts();
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+};
+
 window.deleteProductItem = async function(id) {
   if (!confirm('Remove this product?')) return;
   try {
     const res = await fetch(`/api/products/${id}`, { method: 'DELETE', headers: getAuthHeaders() });
-    if (!res.ok) throw new Error('Failed to delete product');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Failed to delete product');
     showToast('Product removed.', 'info');
     loadProducts();
   } catch (err) {
@@ -1646,9 +1788,11 @@ function renderAffiliatesTable() {
       <article class="vault-item">
         <div class="vault-item-copy">
           <strong class="vault-item-title">${escapeHtml(a.product_name)}</strong>
-          <span class="vault-item-meta">${escapeHtml(a.tracking_url)}</span>
-          <span class="vault-item-meta">Disclosure included · ${escapeHtml((a.trigger_keywords_list || []).join(', ') || 'No trigger keywords')}</span>
+          <a class="vault-item-meta" href="${escapeHtml(safeHttpsUrl(a.tracking_url) || '#')}" target="_blank" rel="sponsored nofollow noopener">${escapeHtml(a.tracking_url)}</a>
+          <span class="vault-item-meta">${a.is_active ? 'Enabled' : 'Disabled'} · ${escapeHtml((a.trigger_keywords_list || []).join(', '))}</span>
         </div>
+        <button class="btn btn-secondary btn-sm" type="button" onclick="editAffiliateItem(${Number(a.id)})">Edit</button>
+        <button class="btn btn-secondary btn-sm" type="button" onclick="toggleAffiliateItem(${Number(a.id)}, ${!a.is_active})">${a.is_active ? 'Disable' : 'Enable'}</button>
         <button class="btn btn-secondary btn-sm" type="button" onclick="deleteAffiliateItem(${Number(a.id)})" aria-label="Delete ${escapeHtml(a.product_name)}">Remove</button>
       </article>
     `;
@@ -1660,11 +1804,12 @@ function renderAffiliatesTable() {
 function populateAffiliateSelects() {
   if (el.autopilotAffiliateSelect) el.autopilotAffiliateSelect.innerHTML = '<option value="">-- Choose Affiliate Link --</option>';
   if (el.editorAffiliateSelect) el.editorAffiliateSelect.innerHTML = '<option value="">No affiliate</option>';
-  state.affiliates.forEach(a => {
+  state.affiliates.filter(a => a.is_active || Number(a.id) === Number(state.currentArticle.affiliateId)).forEach(a => {
     const opt = document.createElement('option');
     opt.value = String(a.id);
-    opt.textContent = a.product_name;
-    if (el.autopilotAffiliateSelect) el.autopilotAffiliateSelect.appendChild(opt.cloneNode(true));
+    opt.textContent = `${a.product_name}${a.is_active ? '' : ' (disabled; existing selection)'}`;
+    if (!a.is_active) opt.disabled = true;
+    if (a.is_active && el.autopilotAffiliateSelect) el.autopilotAffiliateSelect.appendChild(opt.cloneNode(true));
     if (el.editorAffiliateSelect) el.editorAffiliateSelect.appendChild(opt);
   });
   if (el.editorAffiliateSelect && state.currentArticle.affiliateId) {
@@ -1677,7 +1822,8 @@ if (el.affiliateForm) {
     e.preventDefault();
     const name = document.getElementById('aff-name').value.trim();
     const url = document.getElementById('aff-url').value.trim();
-    const keywords = (document.getElementById('aff-keywords').value || '').split(',').map(k => k.trim()).filter(Boolean);
+    const keywords = document.getElementById('aff-keywords').value.split(',').map(k => k.trim()).filter(Boolean);
+    const affiliateId = document.getElementById('aff-id').value;
 
     try {
       const res = await fetch('/api/affiliates', {
@@ -1687,13 +1833,25 @@ if (el.affiliateForm) {
           product_name: name,
           tracking_url: url,
           keywords,
-          disclosure: 'We may receive a commission for purchases made through this link at no additional cost to you.',
+          affiliate_id: affiliateId ? Number(affiliateId) : null,
+          description: document.getElementById('aff-desc').value.trim(),
+          category: document.getElementById('aff-category').value.trim(),
+          price: document.getElementById('aff-price').value.trim(),
+          image_url: document.getElementById('aff-image').value.trim(),
+          cta_text: document.getElementById('aff-cta').value.trim() || 'View product',
+          placement: document.getElementById('aff-placement').value,
+          disclosure: document.getElementById('aff-disclosure').value.trim(),
+          is_active: document.getElementById('aff-active').checked,
         }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || 'Failed to save affiliate');
-      showToast('Affiliate entry saved!', 'success');
+      showToast(affiliateId ? 'Affiliate product updated.' : 'Affiliate product saved.', 'success');
       el.affiliateForm.reset();
+      document.getElementById('aff-id').value = '';
+      document.getElementById('aff-active').checked = true;
+      document.getElementById('btn-save-affiliate').textContent = 'Save affiliate product';
+      document.getElementById('btn-cancel-affiliate-edit').classList.add('hidden');
       loadAffiliates();
     } catch (err) {
       showToast(err.message, 'error');
@@ -1701,11 +1859,71 @@ if (el.affiliateForm) {
   });
 }
 
+window.editAffiliateItem = function(id) {
+  const affiliate = state.affiliates.find(item => Number(item.id) === Number(id));
+  if (!affiliate) return;
+  document.getElementById('aff-id').value = affiliate.id;
+  document.getElementById('aff-name').value = affiliate.product_name || '';
+  document.getElementById('aff-url').value = affiliate.tracking_url || '';
+  document.getElementById('aff-desc').value = affiliate.description || '';
+  document.getElementById('aff-keywords').value = (affiliate.trigger_keywords_list || []).join(', ');
+  document.getElementById('aff-category').value = affiliate.category || '';
+  document.getElementById('aff-price').value = affiliate.price || '';
+  document.getElementById('aff-image').value = affiliate.image_url || '';
+  document.getElementById('aff-cta').value = affiliate.cta_text || 'View product';
+  document.getElementById('aff-placement').value = affiliate.placement || 'article_end';
+  document.getElementById('aff-disclosure').value = affiliate.disclosure_snippet || '';
+  document.getElementById('aff-active').checked = Boolean(affiliate.is_active);
+  document.getElementById('btn-save-affiliate').textContent = 'Update affiliate product';
+  document.getElementById('btn-cancel-affiliate-edit').classList.remove('hidden');
+  document.getElementById('aff-name').focus();
+};
+
+document.getElementById('btn-cancel-affiliate-edit')?.addEventListener('click', () => {
+  el.affiliateForm.reset();
+  document.getElementById('aff-id').value = '';
+  document.getElementById('aff-active').checked = true;
+  document.getElementById('btn-save-affiliate').textContent = 'Save affiliate product';
+  document.getElementById('btn-cancel-affiliate-edit').classList.add('hidden');
+});
+
+window.toggleAffiliateItem = async function(id, isActive) {
+  const affiliate = state.affiliates.find(item => Number(item.id) === Number(id));
+  if (!affiliate) return;
+  try {
+    const res = await fetch('/api/affiliates', {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({
+        affiliate_id: Number(affiliate.id),
+        product_name: affiliate.product_name,
+        tracking_url: affiliate.tracking_url,
+        keywords: affiliate.trigger_keywords_list || [],
+        disclosure: affiliate.disclosure_snippet || '',
+        description: affiliate.description || '',
+        image_url: affiliate.image_url || '',
+        category: affiliate.category || '',
+        price: affiliate.price || '',
+        cta_text: affiliate.cta_text || 'View product',
+        placement: affiliate.placement || 'article_end',
+        is_active: isActive,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Affiliate status could not be updated.');
+    showToast(isActive ? 'Affiliate product enabled.' : 'Affiliate product disabled.', 'success');
+    await loadAffiliates();
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+};
+
 window.deleteAffiliateItem = async function(id) {
   if (!confirm('Remove this affiliate link?')) return;
   try {
     const res = await fetch(`/api/affiliates/${id}`, { method: 'DELETE', headers: getAuthHeaders() });
-    if (!res.ok) throw new Error('Failed to delete affiliate');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Failed to delete affiliate');
     showToast('Affiliate removed.', 'info');
     loadAffiliates();
   } catch (err) {

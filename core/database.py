@@ -105,6 +105,11 @@ def init_db() -> None:
         CREATE TABLE IF NOT EXISTS affiliate_vault (
           id INTEGER PRIMARY KEY AUTOINCREMENT, product_name TEXT NOT NULL,
           trigger_keywords TEXT NOT NULL DEFAULT '[]', tracking_url TEXT NOT NULL,
+          description TEXT NOT NULL DEFAULT '', image_url TEXT NOT NULL DEFAULT '',
+          category TEXT NOT NULL DEFAULT '', price TEXT NOT NULL DEFAULT '',
+          cta_text TEXT NOT NULL DEFAULT 'View product',
+          placement TEXT NOT NULL DEFAULT 'article_end',
+          is_active INTEGER NOT NULL DEFAULT 1,
           disclosure_snippet TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
         );
         CREATE TABLE IF NOT EXISTS oauth_states (
@@ -120,10 +125,38 @@ def init_db() -> None:
           price TEXT NOT NULL DEFAULT '',
           description TEXT NOT NULL DEFAULT '',
           badge TEXT NOT NULL DEFAULT 'Recommended Guide',
+          image_url TEXT NOT NULL DEFAULT '',
+          keywords TEXT NOT NULL DEFAULT '[]',
+          cta_text TEXT NOT NULL DEFAULT 'Get the guide',
+          is_active INTEGER NOT NULL DEFAULT 1,
           created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL
         );
         """)
+        for table, columns in (
+            ("affiliate_vault", (
+                ("description", "TEXT NOT NULL DEFAULT ''"),
+                ("image_url", "TEXT NOT NULL DEFAULT ''"),
+                ("category", "TEXT NOT NULL DEFAULT ''"),
+                ("price", "TEXT NOT NULL DEFAULT ''"),
+                ("cta_text", "TEXT NOT NULL DEFAULT 'View product'"),
+                ("placement", "TEXT NOT NULL DEFAULT 'article_end'"),
+                ("is_active", "INTEGER NOT NULL DEFAULT 1"),
+            )),
+            ("user_products", (
+                ("image_url", "TEXT NOT NULL DEFAULT ''"),
+                ("keywords", "TEXT NOT NULL DEFAULT '[]'"),
+                ("cta_text", "TEXT NOT NULL DEFAULT 'Get the guide'"),
+                ("is_active", "INTEGER NOT NULL DEFAULT 1"),
+            )),
+        ):
+            existing_columns = {
+                row["name"]
+                for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+            }
+            for name, definition in columns:
+                if name not in existing_columns:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
         article_columns = {row["name"] for row in conn.execute("PRAGMA table_info(articles)").fetchall()}
         if "meta_description" not in article_columns:
             conn.execute("ALTER TABLE articles ADD COLUMN meta_description TEXT NOT NULL DEFAULT ''")
@@ -437,21 +470,47 @@ def log_queue_event(queue_id: int, event: str, *, retry: bool = False, state: st
             conn.execute("UPDATE automation_queue SET state=?,execution_log=?,retry_count=?,updated_at=? WHERE id=?",
                          (state,log,count,now,queue_id))
 
-def save_affiliate(product_name: str, keywords: list[str], tracking_url: str, disclosure: str,
-                   affiliate_id: int | None = None) -> int:
+def save_affiliate(
+    product_name: str,
+    keywords: list[str],
+    tracking_url: str,
+    disclosure: str,
+    affiliate_id: int | None = None,
+    *,
+    description: str = "",
+    image_url: str = "",
+    category: str = "",
+    price: str = "",
+    cta_text: str = "View product",
+    placement: str = "article_end",
+    is_active: bool = True,
+) -> int:
     now = utc_now()
     with connection() as conn:
         if affiliate_id:
-            cur = conn.execute("UPDATE affiliate_vault SET product_name=?,trigger_keywords=?,tracking_url=?,disclosure_snippet=?,updated_at=? WHERE id=?",
-              (product_name.strip(),json.dumps(keywords),tracking_url.strip(),disclosure.strip(),now,affiliate_id))
+            cur = conn.execute("""UPDATE affiliate_vault SET product_name=?,trigger_keywords=?,
+              tracking_url=?,disclosure_snippet=?,description=?,image_url=?,category=?,price=?,
+              cta_text=?,placement=?,is_active=?,updated_at=? WHERE id=?""",
+              (product_name.strip(),json.dumps(keywords),tracking_url.strip(),disclosure.strip(),
+               description.strip(),image_url.strip(),category.strip(),price.strip(),cta_text.strip(),
+               placement,int(is_active),now,affiliate_id))
             if cur.rowcount == 0: raise ValueError("Affiliate entry not found")
             return affiliate_id
-        cur = conn.execute("INSERT INTO affiliate_vault(product_name,trigger_keywords,tracking_url,disclosure_snippet,created_at,updated_at) VALUES(?,?,?,?,?,?)",
-          (product_name.strip(),json.dumps(keywords),tracking_url.strip(),disclosure.strip(),now,now))
+        cur = conn.execute("""INSERT INTO affiliate_vault
+          (product_name,trigger_keywords,tracking_url,disclosure_snippet,description,image_url,
+           category,price,cta_text,placement,is_active,created_at,updated_at)
+          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+          (product_name.strip(),json.dumps(keywords),tracking_url.strip(),disclosure.strip(),
+           description.strip(),image_url.strip(),category.strip(),price.strip(),cta_text.strip(),
+           placement,int(is_active),now,now))
         return int(cur.lastrowid)
 
-def list_affiliates() -> list[dict[str, Any]]:
-    with connection() as conn: rows = conn.execute("SELECT * FROM affiliate_vault ORDER BY updated_at DESC").fetchall()
+def list_affiliates(*, active_only: bool = False) -> list[dict[str, Any]]:
+    query = "SELECT * FROM affiliate_vault"
+    if active_only:
+        query += " WHERE is_active=1"
+    query += " ORDER BY updated_at DESC"
+    with connection() as conn: rows = conn.execute(query).fetchall()
     result = []
     for row in rows:
         item = dict(row)
@@ -462,36 +521,74 @@ def list_affiliates() -> list[dict[str, Any]]:
 
 def delete_affiliate(affiliate_id: int) -> bool:
     with connection() as conn:
+        used = conn.execute(
+            "SELECT 1 FROM articles WHERE affiliate_id=? LIMIT 1", (affiliate_id,)
+        ).fetchone()
+        revised = conn.execute(
+            "SELECT 1 FROM article_revisions WHERE affiliate_id=? LIMIT 1", (affiliate_id,)
+        ).fetchone()
+        if used or revised:
+            raise ValueError("This affiliate is linked to saved articles or revisions. Disable it instead to preserve those articles.")
         cur = conn.execute("DELETE FROM affiliate_vault WHERE id=?", (affiliate_id,))
         return cur.rowcount > 0
 
 def list_products() -> list[dict[str, Any]]:
     with connection() as conn:
         rows = conn.execute("SELECT * FROM user_products ORDER BY updated_at DESC").fetchall()
-        return [dict(r) for r in rows]
+    result = []
+    for row in rows:
+        item = dict(row)
+        try:
+            item["keywords_list"] = json.loads(item.get("keywords") or "[]")
+        except (TypeError, json.JSONDecodeError):
+            item["keywords_list"] = []
+        result.append(item)
+    return result
 
 def get_product(product_id: int) -> dict[str, Any] | None:
     with connection() as conn:
         row = conn.execute("SELECT * FROM user_products WHERE id=?", (product_id,)).fetchone()
-        return dict(row) if row else None
+    if not row:
+        return None
+    item = dict(row)
+    try:
+        item["keywords_list"] = json.loads(item.get("keywords") or "[]")
+    except (TypeError, json.JSONDecodeError):
+        item["keywords_list"] = []
+    return item
 
 def save_product(*, title: str, url: str, price: str = "", description: str = "",
-                 badge: str = "Recommended Guide", product_id: int | None = None) -> int:
+                 badge: str = "Recommended Guide", product_id: int | None = None,
+                 image_url: str = "", keywords: list[str] | None = None,
+                 cta_text: str = "Get the guide", is_active: bool = True) -> int:
     now = utc_now()
+    keyword_json = json.dumps(keywords or [], ensure_ascii=False)
     with connection() as conn:
         if product_id:
-            cur = conn.execute("""UPDATE user_products SET title=?, url=?, price=?, description=?, badge=?, updated_at=?
-                WHERE id=?""", (title.strip(), url.strip(), price.strip(), description.strip(), badge.strip(), now, product_id))
+            cur = conn.execute("""UPDATE user_products SET title=?, url=?, price=?, description=?,
+                badge=?, image_url=?, keywords=?, cta_text=?, is_active=?, updated_at=? WHERE id=?""",
+                (title.strip(),url.strip(),price.strip(),description.strip(),badge.strip(),
+                 image_url.strip(),keyword_json,cta_text.strip(),int(is_active),now,product_id))
             if cur.rowcount == 0:
                 raise ValueError("Product not found")
             return product_id
-        cur = conn.execute("""INSERT INTO user_products (title, url, price, description, badge, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (title.strip(), url.strip(), price.strip(), description.strip(), badge.strip(), now, now))
+        cur = conn.execute("""INSERT INTO user_products
+            (title,url,price,description,badge,image_url,keywords,cta_text,is_active,created_at,updated_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+            (title.strip(),url.strip(),price.strip(),description.strip(),badge.strip(),image_url.strip(),
+             keyword_json,cta_text.strip(),int(is_active),now,now))
         return int(cur.lastrowid)
 
 def delete_product(product_id: int) -> bool:
     with connection() as conn:
+        used = conn.execute(
+            "SELECT 1 FROM articles WHERE product_id=? LIMIT 1", (product_id,)
+        ).fetchone()
+        revised = conn.execute(
+            "SELECT 1 FROM article_revisions WHERE product_id=? LIMIT 1", (product_id,)
+        ).fetchone()
+        if used or revised:
+            raise ValueError("This owned product is linked to saved articles or revisions. Disable it instead to preserve those articles.")
         cur = conn.execute("DELETE FROM user_products WHERE id=?", (product_id,))
         return cur.rowcount > 0
 

@@ -302,48 +302,84 @@ def _separate_major_sections(body: str) -> str:
         return prefix + match.group(0)
 
     return re.sub(r"(<h2\b[^>]*>)(.*?)(</h2>)", lambda match: separator(match), body, flags=re.I | re.S)
-def affiliate_box(product_name: str, tracking_url: str, disclosure: str) -> str:
+def affiliate_box(
+    product_name: str,
+    tracking_url: str,
+    disclosure: str,
+    *,
+    description: str = "",
+    image_url: str = "",
+    category: str = "",
+    price: str = "",
+    cta_text: str = "View product",
+    placement: str = "article_end",
+    keywords: list[str] | None = None,
+) -> str:
     url = html.escape(tracking_url.strip(), quote=True)
-    if not url.startswith(("https://","http://")): raise ValueError("Affiliate URL must begin with http:// or https://")
-    return ('<aside class="affiliate-recommendation"><p><strong>Affiliate disclosure:</strong> '
-      + html.escape(disclosure.strip()) + '</p><p><a href="' + url
-      + '" rel="sponsored nofollow noopener" target="_blank">' + html.escape(product_name.strip())
-      + '</a></p></aside>')
+    if not url.startswith("https://"):
+        raise ValueError("Affiliate URL must begin with https://")
+    image = ""
+    if image_url.strip():
+        image = (
+            '<img src="' + html.escape(image_url.strip(), quote=True) + '" alt="'
+            + html.escape(product_name.strip(), quote=True)
+            + '" loading="lazy" style="max-width:180px;height:auto;">'
+        )
+    details = f"<p>{html.escape(description.strip())}</p>" if description.strip() else ""
+    category_line = f"<p><strong>Category:</strong> {html.escape(category.strip())}</p>" if category.strip() else ""
+    price_line = f"<p><strong>Price:</strong> {html.escape(price.strip())}</p>" if price.strip() else ""
+    card_class = "affiliate-product-card" if placement == "product_card" else "affiliate-recommendation"
+    card = (
+        '<aside class="' + card_class + '" style="border:1px solid #cbd5e1;'
+        'padding:16px;margin:24px 0;border-radius:8px;">'
+        + '<p><strong>Affiliate disclosure:</strong> ' + html.escape(disclosure.strip()) + "</p>"
+        + image + "<h3>" + html.escape(product_name.strip()) + "</h3>" + details
+        + category_line + price_line
+        + '<p><a href="' + url
+        + '" rel="sponsored nofollow noopener" target="_blank">'
+        + html.escape(cta_text.strip() or "View product") + "</a></p></aside>"
+    )
+    return card
 
 def ebook_card_box(
     title: str = "Code to Career — The Python Fresher to Job-Ready Developer",
     product_url: str = "https://codetocareer52.myinstamojo.com/product/code-to-career",
     price: str = "₹499",
-    tagline: str = "Fast-track from beginner to an interview-ready, high-earning Python developer.",
-    cover_image_url: str = "https://storeassets.im-cdn.com/media-manager/demostores/RUANbj2YRQm8vlaCVWuH_hero-banner_1440x650_webp.png",
+    tagline: str = "",
+    cover_image_url: str = "",
     bullet_points: list[str] | None = None,
+    cta_text: str = "Get eBook on Instamojo →",
 ) -> str:
-    """Generate a responsive, high-converting eBook CTA banner for Instamojo / Cashfree sales."""
+    """Render a configurable owned-product card without inventing product claims."""
     url = html.escape(product_url.strip(), quote=True)
+    if not url.startswith("https://"):
+        raise ValueError("Product checkout URL must begin with https://")
     t = html.escape(title.strip())
     p = html.escape(price.strip())
     tag = html.escape(tagline.strip())
-    bullets = bullet_points or [
-        "Hands-on production projects & code repositories",
-        "Step-by-step interview preparation & architecture breakdowns",
-        "Instant digital download with free lifetime updates",
-    ]
-    bullet_items = "".join(f'<li style="margin-bottom:6px;">✓ {html.escape(b)}</li>' for b in bullets)
+    bullets = bullet_points or []
+    bullet_items = "".join(f'<li style="margin-bottom:6px;">{html.escape(b)}</li>' for b in bullets)
+    cover = ""
+    if cover_image_url.strip():
+        cover = (
+            '<img src="' + html.escape(cover_image_url.strip(), quote=True)
+            + '" alt="' + t + '" loading="lazy" style="max-width:220px;height:auto;">'
+        )
 
     return f'''<!-- Instamojo eBook CTA Box -->
 <div class="instamojo-ebook-card" style="margin: 32px 0; padding: 24px; border: 2px solid #4f46e5; border-radius: 16px; background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%); color: #ffffff; box-shadow: 0 10px 30px -5px rgba(79, 70, 229, 0.3); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
   <div style="display: flex; flex-wrap: wrap; gap: 20px; align-items: center;">
+    {cover}
     <div style="flex: 1 1 300px;">
-      <span style="display: inline-block; padding: 4px 12px; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; background: #fbbf24; color: #000000; border-radius: 20px; margin-bottom: 12px;">★ Recommended Resource</span>
       <h3 style="margin: 0 0 8px 0; font-size: 22px; font-weight: 800; line-height: 1.3; color: #ffffff;">{t}</h3>
       <p style="margin: 0 0 14px 0; font-size: 15px; color: #cbd5e1; line-height: 1.5;">{tag}</p>
-      <ul style="list-style: none; padding: 0; margin: 0 0 18px 0; font-size: 14px; color: #94a3b8;">
+      <ul style="padding-left: 20px; margin: 0 0 18px 0; font-size: 14px; color: #94a3b8;">
         {bullet_items}
       </ul>
       <div style="display: flex; align-items: center; gap: 16px; flex-wrap: wrap;">
-        <span style="font-size: 24px; font-weight: 900; color: #34d399;">{p}</span>
+        {f'<span style="font-size: 24px; font-weight: 900; color: #34d399;">{p}</span>' if p else ''}
         <a href="{url}" target="_blank" rel="noopener noreferrer" style="display: inline-block; padding: 12px 28px; background: #4f46e5; color: #ffffff; text-decoration: none; font-weight: 700; font-size: 15px; border-radius: 8px; transition: background 0.2s; box-shadow: 0 4px 14px rgba(79, 70, 229, 0.4);">
-          Get eBook on Instamojo &rarr;
+          {html.escape(cta_text.strip() or 'Get the guide')}
         </a>
       </div>
     </div>
@@ -353,6 +389,7 @@ def ebook_card_box(
 
 def render_article(markdown_text: str, title: str, primary_keyword: str="", *, include_toc: bool=True,
                    description: str="", faq: list[dict[str,str]]|None=None, affiliate_html: str="",
+                   affiliate_placement: str = "article_end", affiliate_keywords: list[str] | None = None,
                    ebook_html: str="", featured_image_html: str="", section_image_html: str="",
                    blog_url: str="https://aigen023.blogspot.com/") -> tuple[str,dict[str,Any]]:
     headings = parse_headings(markdown_text)
@@ -394,7 +431,27 @@ def render_article(markdown_text: str, title: str, primary_keyword: str="", *, i
     if ebook_html:
         body += "\n" + _sanitize_article_html(ebook_html)
     if affiliate_html:
-        body += "\n" + _sanitize_article_html(affiliate_html)
+        affiliate_html = _sanitize_article_html(affiliate_html)
+        inserted = False
+        href_match = re.search(r'<a\b[^>]*href="([^"]+)"', affiliate_html, flags=re.I)
+        affiliate_url = html.unescape(href_match.group(1)) if href_match else ""
+        if affiliate_url and affiliate_url in html.unescape(body):
+            inserted = True
+        if not inserted and affiliate_placement == "inline":
+            for match in re.finditer(r"<p\b[^>]*>.*?</p>", body, flags=re.I | re.S):
+                paragraph = match.group(0)
+                if re.search(r"<(?:a|code|pre)\b", paragraph, flags=re.I):
+                    continue
+                visible = re.sub(r"<[^>]+>", " ", paragraph)
+                if any(
+                    re.search(r"(?<!\w)" + re.escape(keyword.strip()) + r"(?!\w)", visible, flags=re.I)
+                    for keyword in (affiliate_keywords or []) if keyword.strip()
+                ):
+                    body = body[:match.end()] + "\n" + affiliate_html + body[match.end():]
+                    inserted = True
+                    break
+        if not inserted and affiliate_placement != "inline":
+            body += "\n" + affiliate_html
     return body,schema
 
 def content_quality_checks(title: str, markdown_text: str) -> list[str]:

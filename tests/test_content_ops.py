@@ -138,6 +138,48 @@ Source -> Deploy
         box = affiliate_box("Example", "https://example.com/?ref=abc", "We may earn a commission.")
         self.assertIn('rel="sponsored nofollow noopener"', box)
         self.assertIn("Affiliate disclosure", box)
+    def test_affiliate_rendering_uses_safe_details_and_contextual_placement(self):
+        block = affiliate_box(
+            "Database course",
+            "https://example.com/?ref=Exact",
+            "Disclosure text",
+            description="<script>unsafe</script> Course",
+            placement="inline",
+            keywords=["database"],
+        )
+        body, _ = render_article(
+            "# Database guide\n\nA database course can help readers learn.\n\n"
+            "## Other details\n\nAn unrelated paragraph.",
+            "Database guide",
+            include_toc=False,
+            affiliate_html=block,
+            affiliate_placement="inline",
+            affiliate_keywords=["database"],
+        )
+        self.assertLess(body.index("</p>"), body.index("affiliate-recommendation"))
+        self.assertIn("&lt;script&gt;unsafe&lt;/script&gt; Course", body)
+        self.assertIn("https://example.com/?ref=Exact", body)
+        self.assertNotIn("<script>", body)
+    def test_affiliate_rendering_avoids_duplicate_selected_link(self):
+        block = affiliate_box("Example", "https://example.com/ref", "Disclosure")
+        body, _ = render_article(
+            "A [recommendation](https://example.com/ref) already exists.",
+            "Guide",
+            include_toc=False,
+            affiliate_html=block,
+        )
+        self.assertEqual(body.count("https://example.com/ref"), 1)
+    def test_inline_affiliate_is_not_appended_when_no_context_matches(self):
+        block = affiliate_box("Database course", "https://example.com/course", "Disclosure")
+        body, _ = render_article(
+            "A practical article about Python scripting.",
+            "Python",
+            include_toc=False,
+            affiliate_html=block,
+            affiliate_placement="inline",
+            affiliate_keywords=["database"],
+        )
+        self.assertNotIn("affiliate-recommendation", body)
     def test_quality_checks_are_warnings_not_exception(self):
         warnings = content_quality_checks("Short", "# Short\n\nTiny")
         self.assertTrue(any("words" in x.lower() for x in warnings))
@@ -153,6 +195,19 @@ Source -> Deploy
         self.assertIn("Code to Career", box)
         self.assertIn("https://codetocareer52.myinstamojo.com/product/code-to-career", box)
         self.assertIn("Get eBook on Instamojo", box)
+    def test_owned_product_card_uses_configured_image_and_cta_without_claims(self):
+        from property_a_blog.seo_optimizer import ebook_card_box
+        box = ebook_card_box(
+            title="My book",
+            product_url="https://example.com/checkout",
+            tagline="Accurate product description.",
+            cover_image_url="https://example.com/cover.jpg",
+            cta_text="Buy my book",
+        )
+        self.assertIn('alt="My book"', box)
+        self.assertIn("Buy my book", box)
+        self.assertIn("Accurate product description.", box)
+        self.assertNotIn("25+ real projects", box)
 
 class DatabaseTests(unittest.TestCase):
     def test_schema_initializes_and_article_roundtrips(self):

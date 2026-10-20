@@ -31,7 +31,7 @@ If Python is installed elsewhere, use that `python.exe` in the first command. Ke
 
 To exercise the local application without external credentials, open the editor, enter a title and Markdown, preview it, and save a draft. The article renderer and local database work without AI or Google credentials. AI generation, image search, OAuth, Blogger, and Search Console require their corresponding server-side environment variables. Do not put API keys in frontend files.
 
-Local article data, revisions, quality reports, review decisions, and Google OAuth credentials are stored in `content_ops.db` by default. Set `CONTENT_OPS_DB` to select another SQLite path. Local development without owner credentials is allowed only when neither owner-auth variable is set; configure both locally to test the login gate.
+Local article data, revisions, quality reports, review decisions, and Google OAuth credentials are stored in `content_ops.db` by default. Set `CONTENT_OPS_DB` to select another SQLite path. The application has no owner-password login; its APIs are accessible to anyone who can reach the deployment unless access is restricted outside the application.
 
 ## Content review
 
@@ -75,12 +75,7 @@ The repository contains `vercel.json` for its FastAPI/static frontend deployment
 | `ANTHROPIC_API_KEY` | Optional server-side Anthropic credential |
 | `PEXELS_API_KEY` | Optional server-side Pexels search credential |
 | `UNSPLASH_ACCESS_KEY` | Optional server-side Unsplash search credential |
-| `APP_OWNER_PASSWORD` | Required on Vercel; single-owner login password (at least 16 characters) |
-| `APP_SESSION_SECRET` | Required with the owner password; unique signing secret of at least 32 characters |
-
 Use only providers/models that are currently available to your account. Provider limits and pricing can change; check each provider's current terms before enabling it. Stock image APIs also have their own attribution rules and quotas. This app does not automatically switch providers or claim any provider is unlimited or permanently free.
-
-Set both owner-auth variables in Vercel project settings before exposing the deployment. Protected API routes fail closed with HTTP 503 on Vercel if either setting is missing or incomplete. Generate a unique session secret locally, for example with `python -c "import secrets; print(secrets.token_urlsafe(48))"`; never commit the password or generated value.
 
 In Google Cloud, enable the Blogger API and Search Console API, configure the OAuth consent screen, and add the exact `GOOGLE_OAUTH_REDIRECT_URI` value to the OAuth client's authorized redirect URIs. Google identity is verified during OAuth, but this does not authorize the separate content-management API. OAuth credentials and provider keys must remain in deployment secrets.
 
@@ -92,9 +87,11 @@ The eBook PWA is a storefront/catalog, not a protected eBook reader. It sends ch
 
 Free hosting and provider quotas are subject to platform limits and can change. This repository cannot guarantee zero cost for every hosting account or third-party service.
 
-## Deployment access control and persistence
+## Access-control warning and persistence
 
-On Vercel, the owner login protects API operations with an expiring signed, HttpOnly, SameSite cookie. Google OAuth tokens are held server-side and are not sent to browser JavaScript. Google OAuth connects Blogger/Search Console; it is not the application login. Vercel's SQLite `/tmp` storage remains ephemeral and cannot reliably preserve articles, revisions, reports, decisions, OAuth state, or integration credentials across function instances and deployments. Select and configure an approved persistent store before depending on production records; no paid or external database has been added.
+The application does not authenticate visitors. If deployed to a public URL, its API exposes saved drafts and review history, permits article/product/affiliate changes and deletions, can trigger configured AI/image-provider usage, and allows Google-connected Blogger/Search Console operations (including explicitly confirmed Blogger draft creation and live navigation updates). Google OAuth connects those integrations; it does **not** authorize access to this application. Keep the deployment private using Vercel Deployment Protection or an equivalent platform-level access control before production use. Do not expose a public deployment with real integration credentials or private content. This repository does not configure or verify platform protection, so this change must not be deployed publicly as-is.
+
+Google OAuth tokens remain server-side and are not sent to browser JavaScript. Vercel's SQLite `/tmp` storage remains ephemeral and cannot reliably preserve articles, revisions, reports, decisions, OAuth state, or integration credentials across function instances and deployments. Select and configure an approved persistent store before depending on production records; no paid or external database has been added.
 
 The automated commands above cover Python compilation, mocked unit tests, and JavaScript syntax. They do not prove that a live OAuth login, Blogger draft creation, Search Console report, AI provider request, Vercel deployment, or Pexels/Unsplash request succeeds. Those require credentials and a controlled live test.
 

@@ -134,13 +134,6 @@ const el = {
   btnQualityHistory: document.getElementById('btn-quality-history'),
   btnQualityRevisions: document.getElementById('btn-quality-revisions'),
   viewBtns: document.querySelectorAll('.view-btn'),
-  ownerLoginGate: document.getElementById('owner-login-gate'),
-  ownerLoginForm: document.getElementById('owner-login-form'),
-  ownerLoginPassword: document.getElementById('owner-login-password'),
-  ownerLoginMessage: document.getElementById('owner-login-message'),
-  ownerLoginSubmit: document.getElementById('owner-login-submit'),
-  ownerLogoutButton: document.getElementById('owner-logout-btn'),
-
   // Products & Affiliates
   productForm: document.getElementById('product-form'),
   productsTableContainer: document.getElementById('products-table-container'),
@@ -208,7 +201,7 @@ function safeReviewSourceUrl(value) {
   }
 }
 
-// Same-origin session cookies authorize requests; Google tokens never enter the browser.
+// Google tokens never enter the browser; API requests use same-origin routes.
 function getAuthHeaders(extraHeaders = {}) {
   return { 'Content-Type': 'application/json', ...extraHeaders };
 }
@@ -1492,45 +1485,7 @@ if (el.rewriteBloggerSelect) {
   });
 }
 
-let applicationStarted = false;
-
-function setOwnerWorkspaceVisible(visible, statusMessage = '') {
-  document.getElementById('app-wrapper').classList.toggle('hidden', !visible);
-  document.getElementById('app-wrapper').setAttribute('aria-hidden', String(!visible));
-  el.ownerLoginGate.classList.toggle('hidden', visible);
-  el.ownerLogoutButton.classList.toggle('hidden', !visible || !window.ownerAuthRequired);
-  if (statusMessage) el.ownerLoginMessage.textContent = statusMessage;
-  if (!visible) el.ownerLoginPassword.focus();
-}
-
-async function initializeOwnerAccess() {
-  try {
-    const response = await fetch('/api/auth/status', { cache: 'no-store' });
-    const access = await response.json();
-    if (!response.ok) throw new Error(access.detail || 'Could not check owner access.');
-    window.ownerAuthRequired = Boolean(access.required);
-    if (!access.configured) {
-      setOwnerWorkspaceVisible(false, 'Owner login is not configured. Set APP_OWNER_PASSWORD and an APP_SESSION_SECRET of at least 32 characters in the server environment.');
-      el.ownerLoginSubmit.disabled = true;
-      return false;
-    }
-    if (access.required && !access.authenticated) {
-      setOwnerWorkspaceVisible(false, 'Sign in to access this private content workspace.');
-      el.ownerLoginSubmit.disabled = false;
-      return false;
-    }
-    setOwnerWorkspaceVisible(true);
-    return true;
-  } catch (err) {
-    setOwnerWorkspaceVisible(false, 'The application could not verify access. Check the server and try again.');
-    el.ownerLoginSubmit.disabled = true;
-    return false;
-  }
-}
-
 async function startApplication() {
-  if (applicationStarted || !await initializeOwnerAccess()) return;
-  applicationStarted = true;
   loadProviderStatus();
   checkOAuthStatus();
   loadProducts();
@@ -1542,43 +1497,6 @@ async function startApplication() {
     window.history.replaceState({}, document.title, window.location.pathname);
     setTimeout(checkOAuthStatus, 500);
   }
-}
-
-if (el.ownerLoginForm) {
-  el.ownerLoginForm.addEventListener('submit', async (event) => {
-    event.preventDefault();
-    el.ownerLoginSubmit.disabled = true;
-    el.ownerLoginMessage.textContent = 'Signing in…';
-    try {
-      const response = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password: el.ownerLoginPassword.value }),
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.detail || 'Sign-in failed.');
-      el.ownerLoginPassword.value = '';
-      await startApplication();
-    } catch (err) {
-      el.ownerLoginMessage.textContent = err.message;
-    } finally {
-      el.ownerLoginSubmit.disabled = false;
-    }
-  });
-}
-
-if (el.ownerLogoutButton) {
-  el.ownerLogoutButton.addEventListener('click', async () => {
-    try {
-      const response = await fetch('/api/auth/logout', { method: 'POST' });
-      if (!response.ok) throw new Error('Could not end the owner session.');
-      applicationStarted = false;
-      await initializeOwnerAccess();
-      el.ownerLoginMessage.textContent = 'You have signed out.';
-    } catch (err) {
-      showToast(err.message, 'error');
-    }
-  });
 }
 
 // View Toggles (Rendered, HTML, Schema)
@@ -1607,5 +1525,5 @@ function debounce(func, wait) {
 
 // Startup Initialization
 window.addEventListener('DOMContentLoaded', () => {
-  startApplication();
+  void startApplication();
 });

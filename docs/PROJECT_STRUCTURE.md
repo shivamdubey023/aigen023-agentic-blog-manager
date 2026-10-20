@@ -77,8 +77,8 @@ This is a Vercel-hosted FastAPI application with a plain HTML/CSS/JavaScript fro
 | `core/stock_images.py`, `core/image_renderer.py` | Pexels/Unsplash search validation and safe image markup. |
 | `property_a_blog/blogger_client.py` | Google OAuth, Blogger API operations, and Search Console report adapter. |
 | `property_a_blog/navigation.py` | Ordering live posts and building idempotent previous/next navigation. |
-| `tests/` | `unittest` tests for business logic, SQLite, quality-review persistence and authorization, API-backed PWA responses, responsive web navigation, and mocked integrations. |
-| `app.py` | Legacy Streamlit dashboard. It is not a Vercel entry point; its queue batch controls, CSV export, date-range report UI, and some repost/settings workflows have not all been migrated to the browser application. |
+| `tests/` | `unittest` tests for business logic, SQLite, quality-review persistence, API-backed PWA responses, responsive web navigation, and mocked integrations. |
+| `app.py` | Legacy Streamlit dashboard. It is not a Vercel entry point; its queue batch controls, CSV export, date-range report UI, and some repost/settings workflows have not all been migrated to the browser application. It has no owner login; keep any separately hosted instance behind platform-level access protection. |
 | `.github/workflows/validate.yml` | CI for Python compilation/tests and JavaScript syntax checks. |
 
 ## Request and integration flow
@@ -88,7 +88,7 @@ This is a Vercel-hosted FastAPI application with a plain HTML/CSS/JavaScript fro
 3. The browser uses same-origin `/api/...` requests. FastAPI validates request models and calls the existing `core/` or `property_a_blog/` logic.
 4. Integrations use server environment variables. The browser must not receive AI provider credentials.
 
-Notable API groups include `/api/auth/*`, `/api/health`, `/api/providers`, `/api/trending`, `/api/generate`, `/api/autopilot`, `/api/rewrite`, `/api/render`, `/api/images/*`, `/api/articles`, `/api/articles/{id}/quality-check`, `/api/articles/{id}/quality-reports`, `/api/articles/{id}/revisions`, `/api/articles/{id}/review`, `/api/products`, `/api/affiliates`, `/api/oauth/*`, `/api/blogger/*`, and `/api/search-console`. The public `/api/health` and `/api/ebook/catalog` responses are limited to status/storefront data. Other API endpoints require an owner session on Vercel.
+Notable API groups include `/api/health`, `/api/providers`, `/api/trending`, `/api/generate`, `/api/autopilot`, `/api/rewrite`, `/api/render`, `/api/images/*`, `/api/articles`, `/api/articles/{id}/quality-check`, `/api/articles/{id}/quality-reports`, `/api/articles/{id}/revisions`, `/api/articles/{id}/review`, `/api/products`, `/api/affiliates`, `/api/oauth/*`, `/api/blogger/*`, and `/api/search-console`. All API routes are unauthenticated at the application layer. A public deployment exposes drafts and mutation/publishing operations; platform-level access protection is required before production use.
 
 The current main UI does not expose the legacy Streamlit queue-management workflow, and there are no queue API routes. AdSense reporting is not implemented. Do not present either as available functionality.
 
@@ -100,11 +100,10 @@ Canonical environment variables read by the application:
 - `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_OAUTH_REDIRECT_URI`: Google OAuth configuration.
 - `GROQ_API_KEY`, `GEMINI_API_KEY`, `COHERE_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`: optional server-side AI credentials.
 - `PEXELS_API_KEY`, `UNSPLASH_ACCESS_KEY`: optional server-side stock-image credentials.
-- `APP_OWNER_PASSWORD`, `APP_SESSION_SECRET`: both required on Vercel; owner password must contain at least 16 characters and session signing secret at least 32.
 
 Local development uses `content_ops.db` in the repository directory unless `CONTENT_OPS_DB` is set. Vercel deployments default to `/tmp/content_ops.db`; this filesystem is ephemeral and instance-local, so the database is **not durable production storage**. OAuth state and stored settings have the same limitation. No persistent database service is configured; do not assume that data survives deployments or another function instance.
 
-Vercel-protected API requests use a signed, expiring, HttpOnly owner cookie. If owner settings are absent or incomplete in deployment, protected APIs return HTTP 503. Local development runs without the login only when both owner variables are unset. Google OAuth tokens are read and refreshed from server-side SQLite and are not returned in OAuth callback HTML, JavaScript storage, or client-readable cookies. SQLite is not encrypted at rest by this application, and on Vercel its `/tmp` location is ephemeral; configure suitable durable protected storage before relying on credentials or editorial records in production.
+The application does not authenticate visitors. Configure Vercel Deployment Protection or equivalent platform access control for the full application before production use; the repository does not configure or verify that protection. Google OAuth tokens are read and refreshed from server-side SQLite and are not returned in OAuth callback HTML, JavaScript storage, or client-readable cookies. SQLite is not encrypted at rest by this application, and on Vercel its `/tmp` location is ephemeral; configure suitable durable protected storage before relying on credentials or editorial records in production.
 
 Quality reports include evidence and severity per finding, not an aggregate score. Similarity is a human-review signal, not a plagiarism determination. Citation reachability/relevance, factual accuracy, code execution, and AI authorship are explicitly not verified.
 

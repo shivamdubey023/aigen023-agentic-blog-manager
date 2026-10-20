@@ -1,16 +1,13 @@
 """FastAPI application for NextGen Tech Notes — Multi-Model AI Agentic Blog Hub."""
 from __future__ import annotations
-import hmac
 import json
-import os
 import re
-import time
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Literal, Optional
 
-from fastapi import FastAPI, HTTPException, Path as ApiPath, Request, Response
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi import FastAPI, HTTPException, Path as ApiPath, Request
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -42,64 +39,6 @@ app = FastAPI(
     description="Multi-model AI technical blogging automation, AdSense quality enhancer, and product monetization engine.",
     version="2.2.0",
 )
-
-OWNER_SESSION_COOKIE = "aigen_owner_session"
-OWNER_SESSION_SECONDS = 12 * 60 * 60
-
-def _owner_auth_mode() -> str:
-    password = os.environ.get("APP_OWNER_PASSWORD", "")
-    secret = os.environ.get("APP_SESSION_SECRET", "")
-    deployed = bool(os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"))
-    if not password and not secret and not deployed:
-        return "local"
-    if len(password) >= 16 and len(secret.encode("utf-8")) >= 32:
-        return "configured"
-    return "misconfigured"
-
-def _owner_session_value(expiry: int) -> str:
-    secret = (
-        os.environ.get("APP_SESSION_SECRET", "") + "\0"
-        + os.environ.get("APP_OWNER_PASSWORD", "")
-    ).encode("utf-8")
-    signature = hmac.new(secret, f"owner-session:{expiry}".encode("ascii"), "sha256").hexdigest()
-    return f"{expiry}.{signature}"
-
-def _owner_session_is_valid(request: Request) -> bool:
-    value = request.cookies.get(OWNER_SESSION_COOKIE, "")
-    try:
-        expiry_text, supplied_signature = value.split(".", 1)
-        expiry = int(expiry_text)
-    except (ValueError, TypeError):
-        return False
-    now = int(time.time())
-    if expiry <= now or expiry > now + OWNER_SESSION_SECONDS + 30:
-        return False
-    expected_signature = _owner_session_value(expiry).split(".", 1)[1]
-    return hmac.compare_digest(supplied_signature, expected_signature)
-
-@app.middleware("http")
-async def protect_owner_api(request: Request, call_next):
-    path = request.url.path
-    public_paths = {
-        "/api/health",
-        "/api/auth/status",
-        "/api/auth/login",
-        "/api/auth/logout",
-        "/api/ebook/catalog",
-    }
-    if path.startswith("/api/") and path not in public_paths:
-        mode = _owner_auth_mode()
-        if mode == "misconfigured":
-            return JSONResponse(
-                status_code=503,
-                content={"detail": "Owner authentication is not configured for this deployment."},
-            )
-        if mode == "configured" and not _owner_session_is_valid(request):
-            return JSONResponse(
-                status_code=401,
-                content={"detail": "Owner login is required to access this endpoint."},
-            )
-    return await call_next(request)
 
 # Request Models
 class GenerateArticleRequest(BaseModel):
@@ -167,9 +106,6 @@ class ReviewDecisionRequest(BaseModel):
     notes: str = Field(default="", max_length=2000)
     confirmed: bool = False
 
-class OwnerLoginRequest(BaseModel):
-    password: str = Field(..., min_length=1, max_length=1024)
-
 class CreateBloggerDraftRequest(BaseModel):
     blog_id: str
     title: str
@@ -207,51 +143,6 @@ class AutopilotRequest(BaseModel):
     affiliate_id: Optional[int] = None
 
 # API Routes
-@app.get("/api/auth/status")
-def owner_auth_status(request: Request):
-    mode = _owner_auth_mode()
-    return {
-        "required": mode != "local",
-        "configured": mode == "configured" or mode == "local",
-        "authenticated": mode == "local" or (mode == "configured" and _owner_session_is_valid(request)),
-        "local_development": mode == "local",
-    }
-
-@app.post("/api/auth/login")
-def owner_login(req: OwnerLoginRequest, request: Request, response: Response):
-    mode = _owner_auth_mode()
-    if mode != "configured":
-        raise HTTPException(status_code=503, detail="Owner authentication is not configured.")
-    expected = os.environ.get("APP_OWNER_PASSWORD", "")
-    if not hmac.compare_digest(req.password.encode("utf-8"), expected.encode("utf-8")):
-        raise HTTPException(status_code=401, detail="Invalid owner password.")
-    expiry = int(time.time()) + OWNER_SESSION_SECONDS
-    response.set_cookie(
-        key=OWNER_SESSION_COOKIE,
-        value=_owner_session_value(expiry),
-        max_age=OWNER_SESSION_SECONDS,
-        httponly=True,
-        secure=bool(os.environ.get("VERCEL") or request.url.scheme == "https"
-                    or request.headers.get("x-forwarded-proto") == "https"),
-        samesite="lax",
-        path="/",
-    )
-    response.headers["Cache-Control"] = "no-store"
-    return {"authenticated": True}
-
-@app.post("/api/auth/logout")
-def owner_logout(request: Request, response: Response):
-    response.delete_cookie(
-        key=OWNER_SESSION_COOKIE,
-        httponly=True,
-        secure=bool(os.environ.get("VERCEL") or request.url.scheme == "https"
-                    or request.headers.get("x-forwarded-proto") == "https"),
-        samesite="lax",
-        path="/",
-    )
-    response.headers["Cache-Control"] = "no-store"
-    return {"authenticated": False}
-
 @app.get("/api/health")
 def health_check():
     return {

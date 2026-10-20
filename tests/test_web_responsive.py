@@ -48,11 +48,12 @@ class ResponsiveWebAppTests(unittest.TestCase):
         self.assertIn("env(safe-area-inset-bottom)", response.text)
         self.assertIn("@media (prefers-reduced-motion: reduce)", response.text)
 
-    def test_editor_exposes_quality_review_and_owner_login_controls(self):
+    def test_editor_exposes_quality_review_without_an_owner_login_gate(self):
         page = self.client.get("/")
         self.assertEqual(page.status_code, 200)
+        self.assertIn('<div id="app-wrapper">', page.text)
+        self.assertNotIn("owner-login", page.text)
         for control in (
-            'id="owner-login-form"',
             'id="editor-meta-description"',
             'id="btn-quality-check"',
             'id="btn-quality-approve"',

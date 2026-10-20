@@ -12,19 +12,8 @@
   <link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body>
-  <section id="owner-login-gate" class="owner-login-gate" aria-labelledby="owner-login-title">
-    <form id="owner-login-form" class="owner-login-card">
-      <span class="badge purple">Private content workspace</span>
-      <h1 id="owner-login-title">Owner sign-in</h1>
-      <p id="owner-login-message" class="section-desc" aria-live="polite">Checking application access…</p>
-      <label for="owner-login-password">Owner password</label>
-      <input id="owner-login-password" class="form-control" type="password"
-        autocomplete="current-password" required maxlength="1024">
-      <button id="owner-login-submit" class="btn btn-primary full-width" type="submit">Sign in</button>
-    </form>
-  </section>
   <!-- App Container -->
-  <div id="app-wrapper" class="hidden" aria-hidden="true">
+  <div id="app-wrapper">
     <!-- Top Header -->
     <header class="app-header">
       <div class="header-left">
@@ -43,7 +32,6 @@
         <button class="btn btn-outline btn-sm" id="connect-google-btn">
           Google Login
         </button>
-        <button class="btn btn-outline btn-sm hidden" id="owner-logout-btn" type="button">Sign out</button>
       </div>
     </header>
 

@@ -80,11 +80,8 @@ class ContentQualityEngineTests(unittest.TestCase):
 class ContentQualityApiTests(unittest.TestCase):
     def setUp(self):
         self.auth_environment_patch = patch.dict(os.environ, {
-            "APP_OWNER_PASSWORD": "",
-            "APP_SESSION_SECRET": "",
-            "VERCEL": "",
-            "AWS_LAMBDA_FUNCTION_NAME": "",
-        })
+            "VERCEL": "1",
+        }, clear=True)
         self.auth_environment_patch.start()
         self.temp_dir = tempfile.TemporaryDirectory()
         self.database_path = Path(self.temp_dir.name) / "quality-test.db"
@@ -224,35 +221,19 @@ class ContentQualityApiTests(unittest.TestCase):
             "NEEDS_REVIEW",
         )
 
-    def test_owner_session_protects_mutating_api_with_httponly_cookie(self):
-        settings = {
-            "APP_OWNER_PASSWORD": "test-owner-password",
-            "APP_SESSION_SECRET": "test-session-secret-that-is-at-least-32-bytes",
-        }
-        with patch.dict(os.environ, settings):
-            client = TestClient(app)
-            unauthenticated = client.get("/api/articles")
-            self.assertEqual(unauthenticated.status_code, 401)
+    def test_deployed_api_starts_and_keeps_article_features_without_login_configuration(self):
+        client = TestClient(app)
+        self.assertEqual(client.get("/api/health").status_code, 200)
+        self.assertEqual(client.get("/api/articles").status_code, 200)
+        self.assertEqual(client.get("/api/providers").status_code, 200)
 
-            rejected = client.post("/api/auth/login", json={"password": "wrong"})
-            self.assertEqual(rejected.status_code, 401)
-            accepted = client.post("/api/auth/login", json={"password": settings["APP_OWNER_PASSWORD"]})
-            self.assertEqual(accepted.status_code, 200)
-            self.assertIn("httponly", accepted.headers["set-cookie"].casefold())
-            self.assertEqual(client.get("/api/articles").status_code, 200)
+        saved = self.save_article()
+        self.assertEqual(saved.status_code, 200)
+        self.assertEqual(client.get(f"/api/articles/{saved.json()['id']}").status_code, 200)
 
-            client.post("/api/auth/logout")
-            self.assertEqual(client.get("/api/articles").status_code, 401)
-
-    def test_deployed_api_fails_closed_when_owner_auth_is_unconfigured(self):
-        settings = {
-            "VERCEL": "1",
-            "APP_OWNER_PASSWORD": "",
-            "APP_SESSION_SECRET": "",
-        }
-        with patch.dict(os.environ, settings):
-            response = TestClient(app).get("/api/providers")
-        self.assertEqual(response.status_code, 503)
+        self.assertEqual(client.get("/api/auth/status").status_code, 404)
+        self.assertEqual(client.post("/api/auth/login", json={"password": "unused"}).status_code, 404)
+        self.assertEqual(client.post("/api/auth/logout").status_code, 404)
 
     def test_google_token_headers_are_ignored_and_oauth_callback_does_not_return_tokens(self):
         token = "server-only-test-google-token"

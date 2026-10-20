@@ -17,8 +17,8 @@ These rules describe the current FastAPI, vanilla-JavaScript, and Vercel project
 - Preserve response formats where practical. Use meaningful HTTP status codes and FastAPI `HTTPException` for expected client errors.
 - Do not return tracebacks, provider responses containing secrets, access tokens, or raw internal exception details to clients. Log only useful, redacted diagnostics.
 - Keep credentials server-side. Never put AI keys or Google OAuth tokens in HTML, JavaScript, URLs, browser storage, or client-readable cookies.
-- On Vercel, set both `APP_OWNER_PASSWORD` (at least 16 characters) and a unique `APP_SESSION_SECRET` (at least 32 characters). Protected APIs fail closed when authentication is missing or misconfigured. Local development bypasses login only when both variables are unset.
-- Owner sessions use a signed, expiring, HttpOnly, SameSite cookie. Do not reintroduce Google token headers, browser storage, or client-readable token cookies; OAuth credentials remain server-side.
+- The application has no built-in owner login or API authorization. Before production deployment, require platform-level access protection (such as Vercel Deployment Protection) for the UI and all API routes. Do not publish a publicly accessible deployment containing private drafts or live integration credentials.
+- Keep Google OAuth tokens server-side. Do not add Google token headers, browser storage, or client-readable token cookies.
 - The frontend uses same-origin requests and does not enable CORS. Do not add broad cross-origin credential access.
 - Require explicit confirmation before creating Blogger drafts or changing live post HTML. Avoid blind publish retries and preserve existing content.
 - Do not make unapproved, destructive database changes or introduce a paid storage service.
@@ -29,7 +29,7 @@ These rules describe the current FastAPI, vanilla-JavaScript, and Vercel project
 - Use `textContent` for plain text. Escape untrusted values before HTML insertion, validate URL schemes before making links, and include `rel="noopener noreferrer"` on links opened in a new tab.
 - Render genuine loading, empty, failure, and success states. Do not fabricate analytics, integration health, or successful actions.
 - Keep browser requests same-origin and use server APIs for privileged operations. Never trust browser-supplied identity or role data.
-- Avoid storing authentication credentials in `localStorage`, page markup, or non-HttpOnly cookies. Do not log OAuth codes, session cookies, or API keys.
+- Avoid storing integration credentials in `localStorage`, page markup, or client-readable cookies. Do not log OAuth codes, cookies, or API keys.
 
 ## Integrations and failures
 
@@ -79,6 +79,6 @@ These rules describe the current FastAPI, vanilla-JavaScript, and Vercel project
 - [ ] CI passes on the intended branch.
 - [ ] Vercel routes serve the web app and assets and return correct API status codes.
 - [ ] Required environment variables and OAuth callback are configured privately.
-- [ ] Owner authentication is configured on Vercel; OAuth tokens remain server-side.
+- [ ] Platform-level access protection covers the UI and every API route before production exposure; OAuth tokens remain server-side.
 - [ ] Persistent storage requirements are met; do not rely on Vercel `/tmp` for production records.
 - [ ] Blogger publishing and live updates remain explicit, confirmed actions.
